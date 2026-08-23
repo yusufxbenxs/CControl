@@ -1,9 +1,20 @@
---!strict
--- CLIENT-ONLY PLAYER CONTROL ILLUSION
--- Place in StarterPlayer > StarterPlayerScripts
---
--- The selected player is represented by a LOCAL clone.
--- No RemoteEvents or server-side movement are used.
+--[[
+    LOCAL PLAYER CONTROL ILLUSION
+    Roblox Studio LocalScript
+    Place in StarterPlayer > StarterPlayerScripts
+
+    PC:
+      W A S D = movement
+      SPACE   = jump
+      Mouse   = camera
+
+    Mobile:
+      Left joystick = movement
+      JUMP button   = jump
+      Normal Roblox touch camera = camera
+
+    Everything involving the selected player is local-only.
+]]
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -12,20 +23,26 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-local controlling = false
-local selectedPlayer: Player? = nil
-local puppet: Model? = nil
+local Camera = workspace.CurrentCamera
 
-local originalCharacter: Model? = nil
-local originalRoot: BasePart? = nil
-local hiddenCharacter: Model? = nil
+local controlling = false
+local selectedPlayer = nil
+local puppet = nil
+
+local originalCharacter = nil
+local originalRoot = nil
+
+local hiddenCharacter = nil
 
 local keys = {
 	W = false,
 	A = false,
 	S = false,
-	D = false,
+	D = false
 }
+
+local mobileMove = Vector2.zero
+local mobileTouch = nil
 
 local animationTracks = {}
 
@@ -33,7 +50,7 @@ local animationTracks = {}
 -- HELPERS
 --==================================================
 
-local function getHumanoid(character: Model?)
+local function getHumanoid(character)
 	if not character then
 		return nil
 	end
@@ -41,27 +58,44 @@ local function getHumanoid(character: Model?)
 	return character:FindFirstChildOfClass("Humanoid")
 end
 
-local function getRoot(character: Model?)
+local function getRoot(character)
 	if not character then
 		return nil
 	end
 
-	return character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	return character:FindFirstChild("HumanoidRootPart")
 end
 
-local function makeCorner(object: GuiObject, radius: number)
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, radius)
-	corner.Parent = object
+local function corner(object, radius)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, radius)
+	c.Parent = object
 end
 
-local function setLocalVisibility(character: Model, visible: boolean)
+local function hideLocally(character)
+	if not character then
+		return
+	end
+
 	for _, object in ipairs(character:GetDescendants()) do
 		if object:IsA("BasePart") then
-			object.LocalTransparencyModifier = visible and 0 or 1
-
+			object.LocalTransparencyModifier = 1
 		elseif object:IsA("Decal") or object:IsA("Texture") then
-			object.Transparency = visible and 0 or 1
+			object.Transparency = 1
+		end
+	end
+end
+
+local function showLocally(character)
+	if not character then
+		return
+	end
+
+	for _, object in ipairs(character:GetDescendants()) do
+		if object:IsA("BasePart") then
+			object.LocalTransparencyModifier = 0
+		elseif object:IsA("Decal") or object:IsA("Texture") then
+			object.Transparency = 0
 		end
 	end
 end
@@ -73,10 +107,11 @@ end
 local gui = Instance.new("ScreenGui")
 gui.Name = "LocalControlUI"
 gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
 gui.Parent = PlayerGui
 
 --==================================================
--- MAIN WINDOW
+-- MAIN UI
 --==================================================
 
 local main = Instance.new("Frame")
@@ -86,7 +121,7 @@ main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 main.BorderSizePixel = 0
 main.Parent = gui
 
-makeCorner(main, 12)
+corner(main, 12)
 
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -20, 0, 35)
@@ -110,7 +145,7 @@ dropdown.TextSize = 14
 dropdown.Font = Enum.Font.Gotham
 dropdown.Parent = main
 
-makeCorner(dropdown, 8)
+corner(dropdown, 8)
 
 local playerList = Instance.new("ScrollingFrame")
 playerList.Size = UDim2.new(1, -20, 0, 105)
@@ -121,11 +156,11 @@ playerList.ScrollBarThickness = 5
 playerList.Visible = false
 playerList.Parent = main
 
-makeCorner(playerList, 8)
+corner(playerList, 8)
 
-local listLayout = Instance.new("UIListLayout")
-listLayout.Padding = UDim.new(0, 3)
-listLayout.Parent = playerList
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0, 3)
+layout.Parent = playerList
 
 local controlButton = Instance.new("TextButton")
 controlButton.Size = UDim2.new(1, -20, 0, 38)
@@ -138,24 +173,21 @@ controlButton.TextSize = 15
 controlButton.Font = Enum.Font.GothamBold
 controlButton.Parent = main
 
-makeCorner(controlButton, 8)
+corner(controlButton, 8)
 
 --==================================================
--- SESSION WINDOW
+-- SESSION UI
 --==================================================
 
 local session = Instance.new("Frame")
 session.Size = UDim2.fromOffset(245, 180)
-
--- lower-right / middle-ish
 session.Position = UDim2.new(1, -265, 0.5, -90)
-
 session.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 session.BorderSizePixel = 0
 session.Visible = false
 session.Parent = gui
 
-makeCorner(session, 12)
+corner(session, 12)
 
 local sessionTitle = Instance.new("TextLabel")
 sessionTitle.Size = UDim2.new(1, -20, 0, 32)
@@ -190,7 +222,7 @@ resetButton.TextSize = 13
 resetButton.Font = Enum.Font.GothamBold
 resetButton.Parent = session
 
-makeCorner(resetButton, 7)
+corner(resetButton, 7)
 
 local leaveButton = Instance.new("TextButton")
 leaveButton.Size = UDim2.new(1, -20, 0, 30)
@@ -203,7 +235,7 @@ leaveButton.TextSize = 13
 leaveButton.Font = Enum.Font.GothamBold
 leaveButton.Parent = session
 
-makeCorner(leaveButton, 7)
+corner(leaveButton, 7)
 
 local stopButton = Instance.new("TextButton")
 stopButton.Size = UDim2.new(1, -20, 0, 30)
@@ -216,13 +248,61 @@ stopButton.TextSize = 12
 stopButton.Font = Enum.Font.GothamBold
 stopButton.Parent = session
 
-makeCorner(stopButton, 7)
+corner(stopButton, 7)
+
+--==================================================
+-- MOBILE CONTROLS
+--==================================================
+
+local mobileControls = Instance.new("Frame")
+mobileControls.Name = "MobileControls"
+mobileControls.Size = UDim2.fromScale(1, 1)
+mobileControls.BackgroundTransparency = 1
+mobileControls.Visible = false
+mobileControls.Parent = gui
+
+local movePad = Instance.new("Frame")
+movePad.Size = UDim2.fromOffset(150, 150)
+movePad.Position = UDim2.new(0, 25, 1, -175)
+movePad.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+movePad.BackgroundTransparency = 0.25
+movePad.BorderSizePixel = 0
+movePad.Parent = mobileControls
+
+corner(movePad, 75)
+
+local moveKnob = Instance.new("Frame")
+moveKnob.Size = UDim2.fromOffset(60, 60)
+moveKnob.Position = UDim2.new(0.5, -30, 0.5, -30)
+moveKnob.BackgroundColor3 = Color3.fromRGB(100, 100, 110)
+moveKnob.BackgroundTransparency = 0.15
+moveKnob.BorderSizePixel = 0
+moveKnob.Parent = movePad
+
+corner(moveKnob, 30)
+
+local jumpButton = Instance.new("TextButton")
+jumpButton.Size = UDim2.fromOffset(85, 85)
+jumpButton.Position = UDim2.new(1, -120, 1, -125)
+jumpButton.BackgroundColor3 = Color3.fromRGB(55, 120, 255)
+jumpButton.BackgroundTransparency = 0.15
+jumpButton.BorderSizePixel = 0
+jumpButton.Text = "JUMP"
+jumpButton.TextColor3 = Color3.new(1, 1, 1)
+jumpButton.TextSize = 15
+jumpButton.Font = Enum.Font.GothamBold
+jumpButton.Parent = mobileControls
+
+corner(jumpButton, 42)
+
+-- Only show mobile controls on touch devices.
+local isMobile = UserInputService.TouchEnabled
 
 --==================================================
 -- PLAYER LIST
 --==================================================
 
-local function refreshPlayerList()
+local function refreshPlayers()
 	for _, child in ipairs(playerList:GetChildren()) do
 		if child:IsA("TextButton") then
 			child:Destroy()
@@ -245,7 +325,7 @@ local function refreshPlayerList()
 			button.Font = Enum.Font.Gotham
 			button.Parent = playerList
 
-			makeCorner(button, 6)
+			corner(button, 6)
 
 			button.MouseButton1Click:Connect(function()
 				selectedPlayer = player
@@ -258,9 +338,9 @@ local function refreshPlayerList()
 	playerList.CanvasSize = UDim2.fromOffset(0, count * 33)
 end
 
-refreshPlayerList()
+refreshPlayers()
 
-Players.PlayerAdded:Connect(refreshPlayerList)
+Players.PlayerAdded:Connect(refreshPlayers)
 
 Players.PlayerRemoving:Connect(function(player)
 	if selectedPlayer == player then
@@ -268,7 +348,7 @@ Players.PlayerRemoving:Connect(function(player)
 		dropdown.Text = "Select Player ▼"
 	end
 
-	refreshPlayerList()
+	refreshPlayers()
 end)
 
 dropdown.MouseButton1Click:Connect(function()
@@ -276,26 +356,31 @@ dropdown.MouseButton1Click:Connect(function()
 end)
 
 --==================================================
--- CREATE LOCAL PUPPET
+-- LOCAL PUPPET
 --==================================================
 
-local function createPuppet(player: Player): Model?
+local function createPuppet(player)
 	local character = player.Character
 
 	if not character then
 		return nil
 	end
 
-	local root = getRoot(character)
-	local humanoid = getHumanoid(character)
+	local targetRoot = getRoot(character)
+	local targetHumanoid = getHumanoid(character)
 
-	if not root or not humanoid then
+	if not targetRoot or not targetHumanoid then
 		return nil
 	end
 
 	character.Archivable = true
 
 	local clone = character:Clone()
+
+	if not clone then
+		return nil
+	end
+
 	clone.Name = "__LocalVisualPuppet"
 
 	local cloneRoot = getRoot(clone)
@@ -306,9 +391,8 @@ local function createPuppet(player: Player): Model?
 	end
 
 	clone.Parent = workspace
-	cloneRoot.CFrame = root.CFrame
+	cloneRoot.CFrame = targetRoot.CFrame
 
-	-- Disable scripts in the clone.
 	for _, object in ipairs(clone:GetDescendants()) do
 		if object:IsA("Script")
 			or object:IsA("LocalScript")
@@ -324,13 +408,13 @@ local function createPuppet(player: Player): Model?
 		end
 	end
 
-	local cloneHumanoid = getHumanoid(clone)
+	local humanoid = getHumanoid(clone)
 
-	if cloneHumanoid then
-		cloneHumanoid.WalkSpeed = 11
-		cloneHumanoid.JumpPower = 50
-		cloneHumanoid.AutoRotate = true
-		cloneHumanoid.DisplayDistanceType =
+	if humanoid then
+		humanoid.WalkSpeed = 11
+		humanoid.JumpPower = 50
+		humanoid.AutoRotate = true
+		humanoid.DisplayDistanceType =
 			Enum.HumanoidDisplayDistanceType.None
 	end
 
@@ -341,7 +425,7 @@ end
 -- ANIMATIONS
 --==================================================
 
-local function setupAnimations(character: Model)
+local function setupAnimations(character)
 	local humanoid = getHumanoid(character)
 
 	if not humanoid then
@@ -355,13 +439,12 @@ local function setupAnimations(character: Model)
 		animator.Parent = humanoid
 	end
 
-	-- R15/R6-compatible standard animation IDs.
 	local ids = {
 		Idle = "rbxassetid://507766666",
 		Walk = "rbxassetid://507777826",
 		Run = "rbxassetid://507767714",
 		Jump = "rbxassetid://507765000",
-		Fall = "rbxassetid://507767968",
+		Fall = "rbxassetid://507767968"
 	}
 
 	for name, id in pairs(ids) do
@@ -373,11 +456,9 @@ local function setupAnimations(character: Model)
 		if name == "Idle" then
 			track.Priority = Enum.AnimationPriority.Idle
 			track.Looped = true
-
 		elseif name == "Walk" or name == "Run" then
 			track.Priority = Enum.AnimationPriority.Movement
 			track.Looped = true
-
 		else
 			track.Priority = Enum.AnimationPriority.Action
 		end
@@ -385,9 +466,7 @@ local function setupAnimations(character: Model)
 		animationTracks[name] = track
 	end
 
-	if animationTracks.Idle then
-		animationTracks.Idle:Play()
-	end
+	animationTracks.Idle:Play()
 end
 
 local function stopAnimation(name)
@@ -464,13 +543,14 @@ local function updateAnimations()
 end
 
 --==================================================
--- MOVEMENT
+-- INPUT VECTOR
 --==================================================
 
-local function getInputVector(): Vector3
+local function getInputVector()
 	local x = 0
 	local z = 0
 
+	-- PC keyboard
 	if keys.A then
 		x -= 1
 	end
@@ -487,6 +567,12 @@ local function getInputVector(): Vector3
 		z += 1
 	end
 
+	-- Mobile joystick
+	if mobileMove.Magnitude > 0.05 then
+		x += mobileMove.X
+		z += mobileMove.Y
+	end
+
 	local vector = Vector3.new(x, 0, z)
 
 	if vector.Magnitude > 1 then
@@ -495,6 +581,10 @@ local function getInputVector(): Vector3
 
 	return vector
 end
+
+--==================================================
+-- MOVEMENT
+--==================================================
 
 local function updateMovement()
 	if not controlling or not puppet then
@@ -509,7 +599,7 @@ local function updateMovement()
 
 	local inputVector = getInputVector()
 
-	if inputVector.Magnitude == 0 then
+	if inputVector.Magnitude <= 0.01 then
 		humanoid:Move(Vector3.zero, false)
 		return
 	end
@@ -548,62 +638,76 @@ local function updateMovement()
 end
 
 --==================================================
--- STOP CONTROL
+-- MOBILE JOYSTICK
 --==================================================
 
-local function stopControl()
-	if not controlling then
+local function updateJoystick(position)
+	local center =
+		movePad.AbsolutePosition +
+		(movePad.AbsoluteSize / 2)
+
+	local offset = position - center
+	local radius = movePad.AbsoluteSize.X / 2
+
+	if offset.Magnitude > radius then
+		offset = offset.Unit * radius
+	end
+
+	mobileMove = Vector2.new(
+		offset.X / radius,
+		offset.Y / radius
+	)
+
+	moveKnob.Position = UDim2.fromOffset(
+		movePad.AbsoluteSize.X / 2 + offset.X - 30,
+		movePad.AbsoluteSize.Y / 2 + offset.Y - 30
+	)
+end
+
+local function resetJoystick()
+	mobileMove = Vector2.zero
+	mobileTouch = nil
+
+	moveKnob.Position =
+		UDim2.new(0.5, -30, 0.5, -30)
+end
+
+movePad.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		mobileTouch = input
+		updateJoystick(input.Position)
+	end
+end)
+
+UserInputService.TouchMoved:Connect(function(input)
+	if controlling and mobileTouch == input then
+		updateJoystick(input.Position)
+	end
+end)
+
+UserInputService.TouchEnded:Connect(function(input)
+	if mobileTouch == input then
+		resetJoystick()
+	end
+end)
+
+jumpButton.MouseButton1Click:Connect(function()
+	if not controlling or not puppet then
 		return
 	end
 
-	controlling = false
+	local humanoid = getHumanoid(puppet)
 
-	for key in pairs(keys) do
-		keys[key] = false
+	if humanoid then
+		humanoid.Jump = true
 	end
-
-	clearAnimations()
-
-	-- Restore the actual target locally.
-	if hiddenCharacter and hiddenCharacter.Parent then
-		setLocalVisibility(hiddenCharacter, true)
-	end
-
-	hiddenCharacter = nil
-
-	if puppet then
-		puppet:Destroy()
-		puppet = nil
-	end
-
-	-- Unanchor YOUR character locally.
-	if originalRoot and originalRoot.Parent then
-		originalRoot.Anchored = false
-	end
-
-	local camera = workspace.CurrentCamera
-	camera.CameraType = Enum.CameraType.Custom
-
-	if originalCharacter then
-		local humanoid = getHumanoid(originalCharacter)
-
-		if humanoid then
-			camera.CameraSubject = humanoid
-		end
-	end
-
-	selectedPlayer = nil
-	controlling = false
-
-	session.Visible = false
-	main.Visible = true
-end
+end)
 
 --==================================================
 -- START CONTROL
 --==================================================
 
-local function startControl(player: Player)
+local function startControl(player)
 	if controlling then
 		return
 	end
@@ -642,21 +746,18 @@ local function startControl(player: Player)
 	selectedPlayer = player
 	controlling = true
 
-	-- Hide the REAL target only on this client.
+	-- Hide target ONLY locally.
 	hiddenCharacter = targetCharacter
-	setLocalVisibility(targetCharacter, false)
+	hideLocally(hiddenCharacter)
 
-	-- Freeze YOUR real character locally.
+	-- Freeze your actual character locally.
 	originalRoot.Anchored = true
 
-	-- Camera follows the local puppet.
-	local puppetHumanoid = getHumanoid(puppet)
+	local humanoid = getHumanoid(puppet)
 
-	if puppetHumanoid then
-		local camera = workspace.CurrentCamera
-
-		camera.CameraType = Enum.CameraType.Custom
-		camera.CameraSubject = puppetHumanoid
+	if humanoid then
+		Camera.CameraType = Enum.CameraType.Custom
+		Camera.CameraSubject = humanoid
 	end
 
 	setupAnimations(puppet)
@@ -669,83 +770,65 @@ local function startControl(player: Player)
 
 	main.Visible = false
 	session.Visible = true
+
+	if isMobile then
+		mobileControls.Visible = true
+	end
 end
 
 --==================================================
--- BUTTONS
+-- STOP CONTROL
 --==================================================
 
-controlButton.MouseButton1Click:Connect(function()
-	if selectedPlayer then
-		startControl(selectedPlayer)
-	end
-end)
-
-stopButton.MouseButton1Click:Connect(function()
-	stopControl()
-end)
-
---==================================================
--- FAKE RESET
---==================================================
-
-resetButton.MouseButton1Click:Connect(function()
-	if not controlling or not puppet or not selectedPlayer then
+local function stopControl()
+	if not controlling then
 		return
 	end
 
-	local targetCharacter = selectedPlayer.Character
-	local targetRoot = getRoot(targetCharacter)
-	local puppetRoot = getRoot(puppet)
+	controlling = false
 
-	if targetRoot and puppetRoot then
-		puppetRoot.CFrame = targetRoot.CFrame
+	for key in pairs(keys) do
+		keys[key] = false
 	end
 
-	local humanoid = getHumanoid(puppet)
+	resetJoystick()
 
-	if humanoid then
-		humanoid.Health = humanoid.MaxHealth
-		humanoid:Move(Vector3.zero, false)
-	end
-end)
+	clearAnimations()
 
---==================================================
--- FAKE LEAVE
---==================================================
-
-leaveButton.MouseButton1Click:Connect(function()
-	if not controlling or not puppet then
-		return
+	if hiddenCharacter and hiddenCharacter.Parent then
+		showLocally(hiddenCharacter)
 	end
 
-	local root = getRoot(puppet)
+	hiddenCharacter = nil
 
-	if root then
-		local startingCFrame = root.CFrame
+	if puppet then
+		puppet:Destroy()
+		puppet = nil
+	end
 
-		for i = 1, 25 do
-			if not puppet or not puppet.Parent then
-				break
-			end
+	if originalRoot and originalRoot.Parent then
+		originalRoot.Anchored = false
+	end
 
-			local currentRoot = getRoot(puppet)
+	Camera.CameraType = Enum.CameraType.Custom
 
-			if currentRoot then
-				currentRoot.CFrame =
-					startingCFrame
-					* CFrame.new(0, i * 0.08, -i * 0.12)
-			end
+	if originalCharacter then
+		local humanoid = getHumanoid(originalCharacter)
 
-			task.wait(0.025)
+		if humanoid then
+			Camera.CameraSubject = humanoid
 		end
 	end
 
-	stopControl()
-end)
+	session.Visible = false
+	main.Visible = true
+	mobileControls.Visible = false
+
+	selectedPlayer = nil
+end
 
 --==================================================
--- KEYBOARD INPUT
+-- PC KEYBOARD
 --==================================================
 
 UserInputService.InputBegan:Connect(function(input, processed)
@@ -792,6 +875,82 @@ UserInputService.InputEnded:Connect(function(input)
 end)
 
 --==================================================
+-- CONTROL BUTTON
+--==================================================
+
+controlButton.MouseButton1Click:Connect(function()
+	if selectedPlayer then
+		startControl(selectedPlayer)
+	end
+end)
+
+stopButton.MouseButton1Click:Connect(function()
+	stopControl()
+end)
+
+--==================================================
+-- FAKE RESET
+--==================================================
+
+resetButton.MouseButton1Click:Connect(function()
+	if not controlling or not puppet or not selectedPlayer then
+		return
+	end
+
+	local targetRoot = getRoot(selectedPlayer.Character)
+	local puppetRoot = getRoot(puppet)
+
+	if targetRoot and puppetRoot then
+		puppetRoot.CFrame = targetRoot.CFrame
+	end
+
+	local humanoid = getHumanoid(puppet)
+
+	if humanoid then
+		humanoid.Health = humanoid.MaxHealth
+		humanoid:Move(Vector3.zero, false)
+	end
+end)
+
+--==================================================
+-- FAKE LEAVE
+--==================================================
+
+leaveButton.MouseButton1Click:Connect(function()
+	if not controlling or not puppet then
+		return
+	end
+
+	local root = getRoot(puppet)
+
+	if root then
+		local startCFrame = root.CFrame
+
+		for i = 1, 25 do
+			if not puppet or not puppet.Parent then
+				break
+			end
+
+			local currentRoot = getRoot(puppet)
+
+			if currentRoot then
+				currentRoot.CFrame =
+					startCFrame *
+					CFrame.new(
+						0,
+						i * 0.08,
+						-i * 0.12
+					)
+			end
+
+			task.wait(0.025)
+		end
+	end
+
+	stopControl()
+end)
+
+--==================================================
 -- RENDER LOOP
 --==================================================
 
@@ -806,12 +965,12 @@ RunService.RenderStepped:Connect(function()
 	local humanoid = getHumanoid(puppet)
 
 	if humanoid then
-		workspace.CurrentCamera.CameraSubject = humanoid
+		Camera.CameraSubject = humanoid
 	end
 end)
 
 --==================================================
--- CHARACTER RESPAWN CLEANUP
+-- RESPAWN CLEANUP
 --==================================================
 
 LocalPlayer.CharacterAdded:Connect(function(character)
@@ -822,3 +981,8 @@ LocalPlayer.CharacterAdded:Connect(function(character)
 	originalCharacter = character
 	originalRoot = getRoot(character)
 end)
+
+-- Initial state
+if isMobile then
+	mobileControls.Visible = false
+end
