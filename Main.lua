@@ -1,8 +1,9 @@
--- Local Character Sync & Control Engine (GitHub Safe)
+-- Modern Local Sync & Control Engine (GitHub Safe)
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local SoundService = game:GetService("SoundService")
 
 local localPlayer = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
@@ -14,10 +15,31 @@ local selectedPlr = nil
 local targetPlayer = nil
 local renderConnection = nil
 local visConnection = nil
+local alignWeld = nil
 
 -- UI Cleanup
 if playerGui:FindFirstChild("SyncControlGUI") then playerGui.SyncControlGUI:Destroy() end
 if playerGui:FindFirstChild("SyncSessionGUI") then playerGui.SyncSessionGUI:Destroy() end
+
+--------------------------------------------------------------------------------
+-- OFFICIAL SOUND ENGINE
+--------------------------------------------------------------------------------
+local function playOfficialSound(soundPath)
+    pcall(function()
+        local snd = Instance.new("Sound")
+        snd.SoundId = soundPath
+        snd.Volume = 0.5
+        snd.Parent = SoundService
+        snd:Play()
+        snd.Ended:Connect(function() snd:Destroy() end)
+    end)
+end
+
+local SOUNDS = {
+    Jump = "rbxasset://sounds/action_jump.mp3",
+    Land = "rbxasset://sounds/action_jump_land.mp3",
+    Oof = "rbxasset://sounds/uuhhh.mp3"
+}
 
 --------------------------------------------------------------------------------
 -- GUI CREATION
@@ -242,7 +264,7 @@ searchBox:GetPropertyChangedSignal("Text"):Connect(function()
 end)
 
 --------------------------------------------------------------------------------
--- REAL CHARACTER MOVEMENT & CAMERA SYNC
+-- REAL CHARACTER MOVEMENT & ANIMATION SYNC
 --------------------------------------------------------------------------------
 local function stopControlSession(destroySession)
     controlling = false
@@ -278,33 +300,29 @@ local function startControlSession()
 
     controlling = true
 
-    -- Constant Local Transparency Enforcer
+    -- Enforce local screen transparency
     if visConnection then visConnection:Disconnect() end
     visConnection = RunService.RenderStepped:Connect(function()
-        -- Hide target character locally so your view isn't blocked by them
         if targetPlayer and targetPlayer.Character then
             setCharacterLocalTransparency(targetPlayer.Character, 1)
         end
-        -- Hide YOUR character locally on your screen, but stay visible to others
         if localPlayer.Character then
             setCharacterLocalTransparency(localPlayer.Character, 1)
         end
     end)
 
-    -- Lock camera view onto target
     local targetHum = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
     if targetHum then
         camera.CameraType = Enum.CameraType.Custom
         camera.CameraSubject = targetHum
     end
 
-    -- Real character movement sync loop
+    -- Real-time position & native animation synchronization loop
     renderConnection = RunService.RenderStepped:Connect(function()
         if not controlling or not targetPlayer or not targetPlayer.Character then return end
         
         local targetHrp = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
         if targetHrp and myHrp then
-            -- Moves your actual character continuously to the target's position natively
             myHrp.CFrame = targetHrp.CFrame
         end
     end)
@@ -322,10 +340,18 @@ stopBtn.MouseButton1Click:Connect(function()
     stopControlSession(false)
 end)
 
+-- Robust Reset Action
 resetBtn.MouseButton1Click:Connect(function()
+    playOfficialSound(SOUNDS.Oof)
     if localPlayer.Character then
-        local hum = localPlayer.Character:FindFirstChildOfClass("Humanoid")
-        if hum then hum.Health = 0 end
+        local myChar = localPlayer.Character
+        local hum = myChar:FindFirstChildOfClass("Humanoid")
+        
+        -- Break joints and zero health to force immediate respawn
+        myChar:BreakJoints()
+        if hum then
+            hum.Health = 0
+        end
     end
     stopControlSession(true)
 end)
