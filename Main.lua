@@ -8,6 +8,7 @@ local Workspace = getService("Workspace")
 local UserInputService = getService("UserInputService")
 local RunService = getService("RunService")
 local CoreGui = getService("CoreGui")
+local SoundService = getService("SoundService")
 
 local localPlayer = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
@@ -18,11 +19,31 @@ local targetPlayer = nil
 local fakeChar = nil
 local originalCFrame = nil
 local renderConnection = nil
+local visConnection = nil
 
 -- Clean up existing UIs
 local guiParent = (gethui and gethui()) or CoreGui or localPlayer:WaitForChild("PlayerGui")
 if guiParent:FindFirstChild("ControlMainGUI") then guiParent.ControlMainGUI:Destroy() end
 if guiParent:FindFirstChild("ControlSessionGUI") then guiParent.ControlSessionGUI:Destroy() end
+
+--------------------------------------------------------------------------------
+-- SOUND EFFECTS ENGINE
+--------------------------------------------------------------------------------
+local function playLocalSound(soundId, volume, parent)
+    local snd = Instance.new("Sound")
+    snd.SoundId = soundId
+    snd.Volume = volume or 1
+    snd.Parent = parent or SoundService
+    snd:Play()
+    snd.Ended:Connect(function() snd:Destroy() end)
+    return snd
+end
+
+local SOUNDS = {
+    Oof = "rbxassetid://12222084",
+    Jump = "rbxassetid://12222216",
+    Footstep = "rbxassetid://9114223179"
+}
 
 --------------------------------------------------------------------------------
 -- UI CREATION
@@ -38,7 +59,7 @@ sessionGui.ResetOnSpawn = false
 sessionGui.Enabled = false
 sessionGui.Parent = guiParent
 
--- Main Selection Window
+-- Main Window
 local mainFrame = Instance.new("Frame")
 mainFrame.Size = UDim2.new(0, 240, 0, 130)
 mainFrame.Position = UDim2.new(0.05, 0, 0.3, 0)
@@ -77,7 +98,7 @@ local closeCorner = Instance.new("UICorner")
 closeCorner.CornerRadius = UDim.new(0, 4)
 closeCorner.Parent = closeBtn
 
--- Dropdown Button
+-- Dropdown
 local dropBtn = Instance.new("TextButton")
 dropBtn.Size = UDim2.new(1, -20, 0, 30)
 dropBtn.Position = UDim2.new(0, 10, 0, 35)
@@ -105,7 +126,7 @@ dropFrame.Parent = mainFrame
 local dropLayout = Instance.new("UIListLayout")
 dropLayout.Parent = dropFrame
 
--- Control Start Button
+-- Start Button
 local controlBtn = Instance.new("TextButton")
 controlBtn.Size = UDim2.new(1, -20, 0, 30)
 controlBtn.Position = UDim2.new(0, 10, 0, 80)
@@ -120,7 +141,7 @@ local controlCorner = Instance.new("UICorner")
 controlCorner.CornerRadius = UDim.new(0, 6)
 controlCorner.Parent = controlBtn
 
--- Session Window (Left-Middle Alignment)
+-- Session Window (Left-Middle)
 local sessionFrame = Instance.new("Frame")
 sessionFrame.Size = UDim2.new(0, 140, 0, 110)
 sessionFrame.Position = UDim2.new(0, 10, 0.5, -55)
@@ -173,7 +194,7 @@ for _, btn in ipairs({stopBtn, resetBtn, leaveBtn}) do
 end
 
 --------------------------------------------------------------------------------
--- DROPDOWN MANAGEMENT
+-- HELPER FUNCTIONS & VISIBILITY
 --------------------------------------------------------------------------------
 local selectedPlr = nil
 
@@ -207,9 +228,6 @@ dropBtn.MouseButton1Click:Connect(function()
     dropFrame.Visible = not dropFrame.Visible
 end)
 
---------------------------------------------------------------------------------
--- CONTROL ENGINE
---------------------------------------------------------------------------------
 local function setCharacterVisibility(character, visible)
     if not character then return end
     local alpha = visible and 0 or 1
@@ -220,122 +238,133 @@ local function setCharacterVisibility(character, visible)
     end
 end
 
-local function stopControlSession()
-    controlling = false
-    if renderConnection then renderConnection:Disconnect() renderConnection = nil end
-
-    if fakeChar then
-        fakeChar:Destroy()
-        fakeChar = nil
-    end
-
-    -- Make real target character visible again
-    if targetPlayer and targetPlayer.Character then
-        setCharacterVisibility(targetPlayer.Character, true)
-    end
-
-    -- Unanchor local player & reset camera
-    if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        localPlayer.Character.HumanoidRootPart.Anchored = false
-        if originalCFrame then
-            localPlayer.Character.HumanoidRootPart.CFrame = originalCFrame
-        end
-        if localPlayer.Character:FindFirstChildOfClass("Humanoid") then
-            camera.CameraSubject = localPlayer.Character:FindFirstChildOfClass("Humanoid")
-        end
-    end
-
-    targetPlayer = nil
-    sessionGui.Enabled = false
-    mainGui.Enabled = true
-end
-
-local function startControlSession()
-    if not selectedPlr or not selectedPlr.Character then return end
-    local realChar = selectedPlr.Character
-    local realHrp = realChar:FindFirstChild("HumanoidRootPart")
-    local myChar = localPlayer.Character
-    local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
-
-    if not realHrp or not myHrp then return end
-
-    controlling = true
-    targetPlayer = selectedPlr
-    originalCFrame = myHrp.CFrame
-
-    -- Anchor local real player to keep position on server
-    myHrp.Anchored = true
-
-    -- Make original target character completely invisible
-    setCharacterVisibility(realChar, false)
-
-    -- Clone character locally
+--------------------------------------------------------------------------------
+-- CONTROL ENGINE
+--------------------------------------------------------------------------------
+local function spawnCloneForTarget(target)
+    if not target or not target.Character then return nil end
+    local realChar = target.Character
     realChar.Archivable = true
-    fakeChar = realChar:Clone()
+    local newClone = realChar:Clone()
     realChar.Archivable = false
-    fakeChar.Name = realChar.Name .. "_Controlled"
-    fakeChar.Parent = Workspace
+    newClone.Name = target.Name .. "_Controlled"
+    newClone.Parent = Workspace
 
-    -- Ensure parts are unanchored for physics
-    for _, part in ipairs(fakeChar:GetDescendants()) do
+    for _, part in ipairs(newClone:GetDescendants()) do
         if part:IsA("BasePart") then
             part.Anchored = false
             part.CanCollide = true
         end
     end
 
-    local fakeHumanoid = fakeChar:FindFirstChildOfClass("Humanoid")
-    local fakeHrp = fakeChar:FindFirstChild("HumanoidRootPart")
+    local animate = newClone:FindFirstChild("Animate")
+    if animate then
+        local newAnim = animate:Clone()
+        animate:Destroy()
+        newAnim.Parent = newClone
+    end
+
+    return newClone
+end
+
+local function stopControlSession(destroyClone)
+    controlling = false
+    if renderConnection then renderConnection:Disconnect() renderConnection = nil end
+
+    if destroyClone and fakeChar then
+        fakeChar:Destroy()
+        fakeChar = nil
+    end
+
+    -- Return camera to local player character
+    if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        localPlayer.Character.HumanoidRootPart.Anchored = false
+        if originalCFrame then
+            localPlayer.Character.HumanoidRootPart.CFrame = originalCFrame
+        end
+        if localPlayer.Character:FindFirstChildOfClass("Humanoid") then
+            camera.CameraType = Enum.CameraType.Custom
+            camera.CameraSubject = localPlayer.Character:FindFirstChildOfClass("Humanoid")
+        end
+    end
+
+    sessionGui.Enabled = false
+    mainGui.Enabled = true
+end
+
+local function startControlSession()
+    if not selectedPlr or not selectedPlr.Character then return end
+    targetPlayer = selectedPlr
+
+    local myChar = localPlayer.Character
+    local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myHrp then return end
+
+    controlling = true
+    originalCFrame = myHrp.CFrame
+    myHrp.Anchored = true
+
+    -- Keep original character invisible constantly
+    if visConnection then visConnection:Disconnect() end
+    visConnection = RunService.RenderStepped:Connect(function()
+        if targetPlayer and targetPlayer.Character then
+            setCharacterVisibility(targetPlayer.Character, false)
+        end
+    end)
+
+    if not fakeChar then
+        fakeChar = spawnCloneForTarget(targetPlayer)
+    end
+
+    local fakeHumanoid = fakeChar and fakeChar:FindFirstChildOfClass("Humanoid")
+    local fakeHrp = fakeChar and fakeChar:FindFirstChild("HumanoidRootPart")
 
     if fakeHumanoid and fakeHrp then
-        -- Refresh Animations
-        local animateScript = fakeChar:FindFirstChild("Animate")
-        if animateScript then
-            local newAnimate = animateScript:Clone()
-            animateScript:Destroy()
-            newAnimate.Parent = fakeChar
-        end
-
         camera.CameraType = Enum.CameraType.Custom
         camera.CameraSubject = fakeHumanoid
+
+        local lastFootstep = 0
+        local wasJumping = false
 
         renderConnection = RunService.RenderStepped:Connect(function()
             if not controlling or not fakeHumanoid or not fakeHrp then return end
 
-            -- Keep original target invisible throughout the session
-            if targetPlayer and targetPlayer.Character then
-                setCharacterVisibility(targetPlayer.Character, false)
-            end
-
-            local moveVector = Vector3.zero
             local camCFrame = camera.CFrame
             local forward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
             local right = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
 
-            -- 1. Keyboard Inputs (PC)
+            local moveVector = Vector3.zero
+
+            -- Keyboard inputs (Fixed camera relative directions)
             if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveVector = moveVector + forward end
             if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveVector = moveVector - forward end
             if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveVector = moveVector + right end
             if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveVector = moveVector - right end
 
-            -- 2. Touch Inputs (Mobile Joystick)
+            -- Mobile Touch Joystick Support
             local myHum = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
             if myHum and myHum.MoveDirection.Magnitude > 0 then
                 moveVector = myHum.MoveDirection
             end
 
-            -- Apply standard Humanoid movement (triggers native walking animations)
+            -- Apply Movement & Walking Sounds
             if moveVector.Magnitude > 0 then
                 fakeHumanoid:Move(moveVector.Unit, true)
+                if tick() - lastFootstep > 0.35 and fakeHumanoid.FloorMaterial ~= Enum.Material.Air then
+                    playLocalSound(SOUNDS.Footstep, 0.4, fakeHrp)
+                    lastFootstep = tick()
+                end
             else
                 fakeHumanoid:Move(Vector3.zero, false)
             end
 
-            -- Jump logic
+            -- Apply Jump & Jump Sound
             local isJumping = UserInputService:IsKeyDown(Enum.KeyCode.Space) or (myHum and myHum.Jump)
-            if isJumping then
+            if isJumping and not wasJumping and fakeHumanoid.FloorMaterial ~= Enum.Material.Air then
                 fakeHumanoid.Jump = true
+                playLocalSound(SOUNDS.Jump, 0.6, fakeHrp)
             end
+            wasJumping = isJumping
         end)
     end
 
@@ -347,13 +376,19 @@ end
 -- EVENT BINDINGS
 --------------------------------------------------------------------------------
 controlBtn.MouseButton1Click:Connect(startControlSession)
-stopBtn.MouseButton1Click:Connect(stopControlSession)
 
+-- Stop Controlling: Camera goes back to user, but fake clone stays alive!
+stopBtn.MouseButton1Click:Connect(function()
+    stopControlSession(false)
+end)
+
+-- Reset Character: Breaks clone apart with Oof sound, then respawns clone & continues controlling
 resetBtn.MouseButton1Click:Connect(function()
     if fakeChar then
         local hum = fakeChar:FindFirstChildOfClass("Humanoid")
-        if hum then
-            -- Break all Motor6D joints for classic Roblox body-part separation death
+        local hrp = fakeChar:FindFirstChild("HumanoidRootPart")
+        if hum and hrp then
+            playLocalSound(SOUNDS.Oof, 1, hrp)
             for _, descendant in ipairs(fakeChar:GetDescendants()) do
                 if descendant:IsA("Motor6D") then
                     descendant:Destroy()
@@ -363,22 +398,42 @@ resetBtn.MouseButton1Click:Connect(function()
             hum.Health = 0
         end
 
-        task.wait(1.5)
-        stopControlSession()
+        task.wait(1.2)
+        if fakeChar then fakeChar:Destroy() fakeChar = nil end
+
+        -- Respawn new clone at target's original spot and re-control
+        if targetPlayer then
+            fakeChar = spawnCloneForTarget(targetPlayer)
+            startControlSession()
+        end
     end
 end)
 
+-- Leave Game: Despawns clone, freezes camera for 3 seconds, then returns to user
 leaveBtn.MouseButton1Click:Connect(function()
     if fakeChar then
         fakeChar:Destroy()
         fakeChar = nil
     end
-    task.wait(0.5)
-    stopControlSession()
+
+    camera.CameraType = Enum.CameraType.Scriptable
+    task.wait(3)
+
+    if visConnection then visConnection:Disconnect() visConnection = nil end
+    if targetPlayer and targetPlayer.Character then
+        setCharacterVisibility(targetPlayer.Character, true)
+    end
+
+    stopControlSession(true)
 end)
 
+-- Close Button (X)
 closeBtn.MouseButton1Click:Connect(function()
-    stopControlSession()
+    if visConnection then visConnection:Disconnect() end
+    if targetPlayer and targetPlayer.Character then
+        setCharacterVisibility(targetPlayer.Character, true)
+    end
+    stopControlSession(true)
     mainGui:Destroy()
     sessionGui:Destroy()
 end)
