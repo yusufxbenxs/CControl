@@ -1,8 +1,9 @@
--- Local Character Sync & Control Engine (GitHub Safe)
+-- Complete Client Control Engine (GitHub Loadstring Safe)
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local SoundService = game:GetService("SoundService")
 
 local localPlayer = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
@@ -12,24 +13,90 @@ local playerGui = localPlayer:WaitForChild("PlayerGui")
 local controlling = false
 local selectedPlr = nil
 local targetPlayer = nil
+local fakeChar = nil
+local originalCFrame = nil
 local renderConnection = nil
 local visConnection = nil
+local loadedTracks = {}
 
 -- UI Cleanup
-if playerGui:FindFirstChild("SyncControlGUI") then playerGui.SyncControlGUI:Destroy() end
-if playerGui:FindFirstChild("SyncSessionGUI") then playerGui.SyncSessionGUI:Destroy() end
+if playerGui:FindFirstChild("FullControlGUI") then playerGui.FullControlGUI:Destroy() end
+if playerGui:FindFirstChild("FullSessionGUI") then playerGui.FullSessionGUI:Destroy() end
+
+--------------------------------------------------------------------------------
+-- SOUND ENGINE
+--------------------------------------------------------------------------------
+local function playLocalSound(soundId, volume, parent)
+    pcall(function()
+        local snd = Instance.new("Sound")
+        snd.SoundId = soundId
+        snd.Volume = volume or 1
+        snd.Parent = parent or SoundService
+        snd:Play()
+        snd.Ended:Connect(function() snd:Destroy() end)
+    end)
+end
+
+local SOUNDS = {
+    Oof = "rbxassetid://12222084",
+    Jump = "rbxassetid://12222216",
+    Footstep = "rbxassetid://9114223179"
+}
+
+--------------------------------------------------------------------------------
+-- MANUAL ANIMATION SYSTEM
+--------------------------------------------------------------------------------
+local function loadManualAnimations(char)
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    
+    local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
+    loadedTracks = {}
+
+    local isR15 = char:FindFirstChild("UpperTorso") ~= nil
+    local animIds = isR15 and {
+        Idle = "rbxassetid://507766388",
+        Walk = "rbxassetid://913403203"
+    } or {
+        Idle = "rbxassetid://180435571",
+        Walk = "rbxassetid://180436334"
+    }
+
+    for name, id in pairs(animIds) do
+        pcall(function()
+            local anim = Instance.new("Animation")
+            anim.AnimationId = id
+            local track = animator:LoadAnimation(anim)
+            loadedTracks[name] = track
+        end)
+    end
+    
+    if loadedTracks.Idle then loadedTracks.Idle:Play() end
+end
+
+local function playTrack(name)
+    if not loadedTracks[name] then return end
+    for trackName, track in pairs(loadedTracks) do
+        if trackName ~= name and track.IsPlaying then
+            track:Stop(0.15)
+        end
+    end
+    if not loadedTracks[name].IsPlaying then
+        loadedTracks[name]:Play(0.15)
+    end
+end
 
 --------------------------------------------------------------------------------
 -- GUI CREATION
 --------------------------------------------------------------------------------
 local mainGui = Instance.new("ScreenGui")
-mainGui.Name = "SyncControlGUI"
+mainGui.Name = "FullControlGUI"
 mainGui.ResetOnSpawn = false
 mainGui.DisplayOrder = 999
 mainGui.Parent = playerGui
 
 local sessionGui = Instance.new("ScreenGui")
-sessionGui.Name = "SyncSessionGUI"
+sessionGui.Name = "FullSessionGUI"
 sessionGui.ResetOnSpawn = false
 sessionGui.DisplayOrder = 999
 sessionGui.Enabled = false
@@ -169,10 +236,11 @@ for _, btn in ipairs({stopBtn, resetBtn, leaveBtn, controlBtn, dropBtn, closeBtn
 end
 
 --------------------------------------------------------------------------------
--- VISIBILITY & SELECTION LOGIC
+-- TARGET & SELECTION HANDLER
 --------------------------------------------------------------------------------
-local function setCharacterLocalTransparency(character, alpha)
+local function setCharacterVisibility(character, visible)
     if not character then return end
+    local alpha = visible and 0 or 1
     for _, part in ipairs(character:GetDescendants()) do
         if part:IsA("BasePart") or part:IsA("Decal") then
             part.LocalTransparencyModifier = alpha
@@ -183,10 +251,11 @@ end
 local function cleanPreviousTarget()
     if visConnection then visConnection:Disconnect() visConnection = nil end
     if targetPlayer and targetPlayer.Character then
-        setCharacterLocalTransparency(targetPlayer.Character, 0)
+        setCharacterVisibility(targetPlayer.Character, true)
     end
-    if localPlayer.Character then
-        setCharacterLocalTransparency(localPlayer.Character, 0)
+    if fakeChar then
+        fakeChar:Destroy()
+        fakeChar = nil
     end
     targetPlayer = nil
 end
@@ -227,6 +296,7 @@ dropBtn.MouseButton1Click:Connect(function()
     dropFrame.Visible = not dropFrame.Visible
 end)
 
+-- Textbox Typing Filter
 searchBox:GetPropertyChangedSignal("Text"):Connect(function()
     local text = searchBox.Text:lower()
     if text == "" then return end
@@ -241,21 +311,41 @@ searchBox:GetPropertyChangedSignal("Text"):Connect(function()
     end
 end)
 
+local function spawnCloneForTarget(target)
+    if not target or not target.Character then return nil end
+    local realChar = target.Character
+    realChar.Archivable = true
+    local newClone = realChar:Clone()
+    realChar.Archivable = false
+    newClone.Name = target.Name .. "_Controlled"
+    newClone.Parent = Workspace
+
+    for _, part in ipairs(newClone:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Anchored = false
+            part.CanCollide = true
+        end
+    end
+
+    loadManualAnimations(newClone)
+    return newClone
+end
+
 --------------------------------------------------------------------------------
--- REAL CHARACTER MOVEMENT & CAMERA SYNC
+-- SMOOTH PHYSICS ENGINE & CONTROLLER
 --------------------------------------------------------------------------------
-local function stopControlSession(destroySession)
+local function stopControlSession(destroyClone)
     controlling = false
     if renderConnection then renderConnection:Disconnect() renderConnection = nil end
 
-    if destroySession then cleanPreviousTarget() end
+    if destroyClone then cleanPreviousTarget() end
 
-    if localPlayer.Character then
-        setCharacterLocalTransparency(localPlayer.Character, 0)
-        local hum = localPlayer.Character:FindFirstChildOfClass("Humanoid")
-        if hum then
+    if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        localPlayer.Character.HumanoidRootPart.Anchored = false
+        if originalCFrame then localPlayer.Character.HumanoidRootPart.CFrame = originalCFrame end
+        if localPlayer.Character:FindFirstChildOfClass("Humanoid") then
             camera.CameraType = Enum.CameraType.Custom
-            camera.CameraSubject = hum
+            camera.CameraSubject = localPlayer.Character:FindFirstChildOfClass("Humanoid")
         end
     end
 
@@ -273,41 +363,85 @@ local function startControlSession()
 
     local myChar = localPlayer.Character
     local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
-    if not myHrp or not myHum then return end
+    if not myHrp then return end
 
     controlling = true
+    originalCFrame = myHrp.CFrame
+    myHrp.Anchored = true
 
-    -- Constant Local Transparency Enforcer
     if visConnection then visConnection:Disconnect() end
     visConnection = RunService.RenderStepped:Connect(function()
-        -- Hide target character locally so your view isn't blocked by them
         if targetPlayer and targetPlayer.Character then
-            setCharacterLocalTransparency(targetPlayer.Character, 1)
-        end
-        -- Hide YOUR character locally on your screen, but stay visible to others
-        if localPlayer.Character then
-            setCharacterLocalTransparency(localPlayer.Character, 1)
+            setCharacterVisibility(targetPlayer.Character, false)
         end
     end)
 
-    -- Lock camera view onto target
-    local targetHum = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
-    if targetHum then
-        camera.CameraType = Enum.CameraType.Custom
-        camera.CameraSubject = targetHum
+    if not fakeChar then
+        fakeChar = spawnCloneForTarget(targetPlayer)
     end
 
-    -- Real character movement sync loop
-    renderConnection = RunService.RenderStepped:Connect(function()
-        if not controlling or not targetPlayer or not targetPlayer.Character then return end
-        
-        local targetHrp = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if targetHrp and myHrp then
-            -- Moves your actual character continuously to the target's position natively
-            myHrp.CFrame = targetHrp.CFrame
-        end
-    end)
+    local fakeHumanoid = fakeChar and fakeChar:FindFirstChildOfClass("Humanoid")
+    local fakeHrp = fakeChar and fakeChar:FindFirstChild("HumanoidRootPart")
+
+    if fakeHumanoid and fakeHrp then
+        camera.CameraType = Enum.CameraType.Custom
+        camera.CameraSubject = fakeHumanoid
+
+        local speed = 16
+        local verticalVelocity = 0
+        local lastFootstep = 0
+        local wasJumping = false
+
+        renderConnection = RunService.RenderStepped:Connect(function(dt)
+            if not controlling or not fakeHrp then return end
+
+            local camCFrame = camera.CFrame
+            local camLook = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
+            local camRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
+
+            local moveDir = Vector3.zero
+
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + camLook end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - camLook end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + camRight end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - camRight end
+
+            -- Downward Raycast Physics for Jump & Ground Detection
+            local ray = Ray.new(fakeHrp.Position, Vector3.new(0, -3.2, 0))
+            local hitPart = Workspace:FindPartOnRayWithIgnoreList(ray, {fakeChar, localPlayer.Character})
+            local isGrounded = hitPart ~= nil
+
+            -- Gravity / Jump Solver
+            local isJumping = UserInputService:IsKeyDown(Enum.KeyCode.Space)
+            if isGrounded then
+                if verticalVelocity < 0 then verticalVelocity = 0 end
+                if isJumping and not wasJumping then
+                    verticalVelocity = 48
+                    playLocalSound(SOUNDS.Jump, 0.6, fakeHrp)
+                end
+            else
+                verticalVelocity = verticalVelocity - (196.2 * dt)
+            end
+            wasJumping = isJumping
+
+            -- Smooth Angular Rotation (60 FPS Interpolation)
+            if moveDir.Magnitude > 0 then
+                moveDir = moveDir.Unit
+                local targetLook = CFrame.lookAt(fakeHrp.Position, fakeHrp.Position + moveDir)
+                fakeHrp.CFrame = fakeHrp.CFrame:Lerp(targetLook, 15 * dt) + (moveDir * speed * dt) + Vector3.new(0, verticalVelocity * dt, 0)
+                
+                playTrack("Walk")
+
+                if tick() - lastFootstep > 0.35 and isGrounded then
+                    playLocalSound(SOUNDS.Footstep, 0.4, fakeHrp)
+                    lastFootstep = tick()
+                end
+            else
+                fakeHrp.CFrame = fakeHrp.CFrame + Vector3.new(0, verticalVelocity * dt, 0)
+                playTrack("Idle")
+            end
+        end)
+    end
 
     mainGui.Enabled = false
     sessionGui.Enabled = true
@@ -323,16 +457,28 @@ stopBtn.MouseButton1Click:Connect(function()
 end)
 
 resetBtn.MouseButton1Click:Connect(function()
-    if localPlayer.Character then
-        local hum = localPlayer.Character:FindFirstChildOfClass("Humanoid")
-        if hum then hum.Health = 0 end
+    if fakeChar then
+        local hrp = fakeChar:FindFirstChild("HumanoidRootPart")
+        if hrp then playLocalSound(SOUNDS.Oof, 1, hrp) end
+        
+        for _, desc in ipairs(fakeChar:GetDescendants()) do
+            if desc:IsA("Motor6D") then desc:Destroy() end
+        end
+
+        task.wait(1.2)
+        if fakeChar then fakeChar:Destroy() fakeChar = nil end
+
+        if targetPlayer then
+            fakeChar = spawnCloneForTarget(targetPlayer)
+            startControlSession()
+        end
     end
-    stopControlSession(true)
 end)
 
 leaveBtn.MouseButton1Click:Connect(function()
+    if fakeChar then fakeChar:Destroy() fakeChar = nil end
     camera.CameraType = Enum.CameraType.Scriptable
-    task.wait(2)
+    task.wait(3)
     stopControlSession(true)
 end)
 
