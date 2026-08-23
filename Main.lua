@@ -210,6 +210,16 @@ end)
 --------------------------------------------------------------------------------
 -- CONTROL ENGINE
 --------------------------------------------------------------------------------
+local function setCharacterVisibility(character, visible)
+    if not character then return end
+    local alpha = visible and 0 or 1
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") or part:IsA("Decal") then
+            part.LocalTransparencyModifier = alpha
+        end
+    end
+end
+
 local function stopControlSession()
     controlling = false
     if renderConnection then renderConnection:Disconnect() renderConnection = nil end
@@ -219,14 +229,12 @@ local function stopControlSession()
         fakeChar = nil
     end
 
+    -- Make real target character visible again
     if targetPlayer and targetPlayer.Character then
-        for _, part in ipairs(targetPlayer.Character:GetDescendants()) do
-            if part:IsA("BasePart") or part:IsA("Decal") then
-                part.LocalTransparencyModifier = 0
-            end
-        end
+        setCharacterVisibility(targetPlayer.Character, true)
     end
 
+    -- Unanchor local player & reset camera
     if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
         localPlayer.Character.HumanoidRootPart.Anchored = false
         if originalCFrame then
@@ -258,21 +266,17 @@ local function startControlSession()
     -- Anchor local real player to keep position on server
     myHrp.Anchored = true
 
-    -- Hide real player target locally
-    for _, part in ipairs(realChar:GetDescendants()) do
-        if part:IsA("BasePart") or part:IsA("Decal") then
-            part.LocalTransparencyModifier = 1
-        end
-    end
+    -- Make original target character completely invisible
+    setCharacterVisibility(realChar, false)
 
-    -- Clone model
+    -- Clone character locally
     realChar.Archivable = true
     fakeChar = realChar:Clone()
     realChar.Archivable = false
     fakeChar.Name = realChar.Name .. "_Controlled"
     fakeChar.Parent = Workspace
 
-    -- Ensure all parts are unanchored so physics work
+    -- Ensure parts are unanchored for physics
     for _, part in ipairs(fakeChar:GetDescendants()) do
         if part:IsA("BasePart") then
             part.Anchored = false
@@ -284,56 +288,53 @@ local function startControlSession()
     local fakeHrp = fakeChar:FindFirstChild("HumanoidRootPart")
 
     if fakeHumanoid and fakeHrp then
-        -- Refresh Humanoid Animator & Animate Script
-        local animator = fakeHumanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", fakeHumanoid)
+        -- Refresh Animations
         local animateScript = fakeChar:FindFirstChild("Animate")
         if animateScript then
-            animateScript.Disabled = true
-            task.wait()
-            animateScript.Disabled = false
+            local newAnimate = animateScript:Clone()
+            animateScript:Destroy()
+            newAnimate.Parent = fakeChar
         end
 
         camera.CameraType = Enum.CameraType.Custom
         camera.CameraSubject = fakeHumanoid
 
-        local speed = 16
-        local jumpPower = 50
-
-        renderConnection = RunService.RenderStepped:Connect(function(dt)
+        renderConnection = RunService.RenderStepped:Connect(function()
             if not controlling or not fakeHumanoid or not fakeHrp then return end
+
+            -- Keep original target invisible throughout the session
+            if targetPlayer and targetPlayer.Character then
+                setCharacterVisibility(targetPlayer.Character, false)
+            end
 
             local moveVector = Vector3.zero
             local camCFrame = camera.CFrame
             local forward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
             local right = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
 
-            -- Keyboard inputs
+            -- 1. Keyboard Inputs (PC)
             if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveVector = moveVector + forward end
             if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveVector = moveVector - forward end
             if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveVector = moveVector + right end
             if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveVector = moveVector - right end
 
-            -- Mobile Touch joystick input
+            -- 2. Touch Inputs (Mobile Joystick)
             local myHum = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
             if myHum and myHum.MoveDirection.Magnitude > 0 then
                 moveVector = myHum.MoveDirection
             end
 
-            -- Apply Movement
+            -- Apply standard Humanoid movement (triggers native walking animations)
             if moveVector.Magnitude > 0 then
-                moveVector = moveVector.Unit
-                fakeHrp.CFrame = CFrame.new(fakeHrp.Position, fakeHrp.Position + moveVector)
-                fakeHrp.AssemblyLinearVelocity = Vector3.new(moveVector.X * speed, fakeHrp.AssemblyLinearVelocity.Y, moveVector.Z * speed)
-                fakeHumanoid:ChangeState(Enum.HumanoidStateType.Running)
+                fakeHumanoid:Move(moveVector.Unit, true)
             else
-                fakeHrp.AssemblyLinearVelocity = Vector3.new(0, fakeHrp.AssemblyLinearVelocity.Y, 0)
+                fakeHumanoid:Move(Vector3.zero, false)
             end
 
-            -- Apply Jump
+            -- Jump logic
             local isJumping = UserInputService:IsKeyDown(Enum.KeyCode.Space) or (myHum and myHum.Jump)
-            if isJumping and (fakeHumanoid:GetState() == Enum.HumanoidStateType.Running or fakeHumanoid:GetState() == Enum.HumanoidStateType.Landed or fakeHumanoid.FloorMaterial ~= Enum.Material.Air) then
-                fakeHrp.AssemblyLinearVelocity = Vector3.new(fakeHrp.AssemblyLinearVelocity.X, jumpPower, fakeHrp.AssemblyLinearVelocity.Z)
-                fakeHumanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            if isJumping then
+                fakeHumanoid.Jump = true
             end
         end)
     end
@@ -352,14 +353,12 @@ resetBtn.MouseButton1Click:Connect(function()
     if fakeChar then
         local hum = fakeChar:FindFirstChildOfClass("Humanoid")
         if hum then
-            -- Break all Motor6D joints so parts collapse and scatter (classic Roblox break-apart death)
+            -- Break all Motor6D joints for classic Roblox body-part separation death
             for _, descendant in ipairs(fakeChar:GetDescendants()) do
                 if descendant:IsA("Motor6D") then
                     descendant:Destroy()
                 end
             end
-
-            -- Trigger Roblox default death state
             hum:ChangeState(Enum.HumanoidStateType.Dead)
             hum.Health = 0
         end
