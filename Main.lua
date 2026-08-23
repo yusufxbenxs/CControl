@@ -1,4 +1,4 @@
--- PC Executor-Friendly Local Control Engine
+-- Universal PC Executor Control Engine (Manual CFrame Physics & Track Injection)
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
@@ -8,38 +8,33 @@ local SoundService = game:GetService("SoundService")
 local localPlayer = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 
--- Global States
+-- State Variables
 local controlling = false
+local selectedPlr = nil
 local targetPlayer = nil
 local fakeChar = nil
 local originalCFrame = nil
 local renderConnection = nil
 local visConnection = nil
-local selectedPlr = nil
+local loadedTracks = {}
 
--- Safe UI Parent Resolver for PC Executors
-local function getSafeGuiParent()
-    local success, result = pcall(function()
-        if gethui then return gethui() end
-        return game:GetService("CoreGui")
-    end)
-    if success and result then
-        -- Test if writing is allowed
-        local test = Instance.new("Folder")
-        local writeSuccess = pcall(function() test.Parent = result end)
-        if writeSuccess then
-            test:Destroy()
-            return result
-        end
+--------------------------------------------------------------------------------
+-- EXECUTOR-SAFE GUI RESOLVER
+--------------------------------------------------------------------------------
+local function getGuiParent()
+    if gethui then 
+        local ok, res = pcall(gethui)
+        if ok and res then return res end
     end
+    local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+    if ok and cg then return cg end
     return localPlayer:WaitForChild("PlayerGui")
 end
 
-local guiParent = getSafeGuiParent()
+local guiParent = getGuiParent()
 
--- Clean up older GUI instances
-if guiParent:FindFirstChild("ControlMainGUI") then guiParent.ControlMainGUI:Destroy() end
-if guiParent:FindFirstChild("ControlSessionGUI") then guiParent.ControlSessionGUI:Destroy() end
+if guiParent:FindFirstChild("ExecControlMainGUI") then guiParent.ExecControlMainGUI:Destroy() end
+if guiParent:FindFirstChild("ExecControlSessionGUI") then guiParent.ExecControlSessionGUI:Destroy() end
 
 --------------------------------------------------------------------------------
 -- SOUND SYSTEM
@@ -62,29 +57,77 @@ local SOUNDS = {
 }
 
 --------------------------------------------------------------------------------
--- GUI CREATION
+-- MANUAL ANIMATION LOADER FOR CLONES
+--------------------------------------------------------------------------------
+local function loadManualAnimations(char)
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    
+    local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
+    loadedTracks = {}
+
+    -- Universal Roblox R15/R6 Default Animation Assets
+    local isR15 = char:FindFirstChild("UpperTorso") ~= nil
+    local animIds = isR15 and {
+        Idle = "rbxassetid://507766388",
+        Walk = "rbxassetid://913403203",
+        Run = "rbxassetid://913384386"
+    } or {
+        Idle = "rbxassetid://180435571",
+        Walk = "rbxassetid://180436334",
+        Run = "rbxassetid://180436334"
+    }
+
+    for name, id in pairs(animIds) do
+        pcall(function()
+            local anim = Instance.new("Animation")
+            anim.AnimationId = id
+            local track = animator:LoadAnimation(anim)
+            loadedTracks[name] = track
+        end)
+    end
+    
+    if loadedTracks.Idle then
+        loadedTracks.Idle:Play()
+    end
+end
+
+local function playTrack(name)
+    if not loadedTracks[name] then return end
+    for trackName, track in pairs(loadedTracks) do
+        if trackName ~= name and track.IsPlaying then
+            track:Stop(0.1)
+        end
+    end
+    if not loadedTracks[name].IsPlaying then
+        loadedTracks[name]:Play(0.1)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- UI CONSTRUCTION
 --------------------------------------------------------------------------------
 local mainGui = Instance.new("ScreenGui")
-mainGui.Name = "ControlMainGUI"
+mainGui.Name = "ExecControlMainGUI"
 mainGui.ResetOnSpawn = false
-mainGui.DisplayOrder = 999
+mainGui.DisplayOrder = 9999
 mainGui.Parent = guiParent
 
 local sessionGui = Instance.new("ScreenGui")
-sessionGui.Name = "ControlSessionGUI"
+sessionGui.Name = "ExecControlSessionGUI"
 sessionGui.ResetOnSpawn = false
-sessionGui.DisplayOrder = 999
+sessionGui.DisplayOrder = 9999
 sessionGui.Enabled = false
 sessionGui.Parent = guiParent
 
--- Main Window
+-- Main Window Frame
 local mainFrame = Instance.new("Frame")
 mainFrame.Size = UDim2.new(0, 240, 0, 130)
 mainFrame.Position = UDim2.new(0.05, 0, 0.3, 0)
 mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 mainFrame.BorderSizePixel = 0
 mainFrame.Active = true
-mainFrame.Draggable = true -- Standard executor drag support
+mainFrame.Draggable = true
 mainFrame.Parent = mainGui
 
 local mainCorner = Instance.new("UICorner")
@@ -95,7 +138,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -30, 0, 30)
 titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Player Control (PC)"
+titleLabel.Text = "Player Control (Executor Fix)"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.Font = Enum.Font.SourceSansBold
 titleLabel.TextSize = 14
@@ -112,10 +155,6 @@ closeBtn.Font = Enum.Font.SourceSansBold
 closeBtn.TextSize = 13
 closeBtn.Parent = mainFrame
 
-local closeCorner = Instance.new("UICorner")
-closeCorner.CornerRadius = UDim.new(0, 4)
-closeCorner.Parent = closeBtn
-
 local dropBtn = Instance.new("TextButton")
 dropBtn.Size = UDim2.new(1, -20, 0, 30)
 dropBtn.Position = UDim2.new(0, 10, 0, 35)
@@ -125,10 +164,6 @@ dropBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 dropBtn.Font = Enum.Font.SourceSans
 dropBtn.TextSize = 13
 dropBtn.Parent = mainFrame
-
-local dropCorner = Instance.new("UICorner")
-dropCorner.CornerRadius = UDim.new(0, 6)
-dropCorner.Parent = dropBtn
 
 local dropFrame = Instance.new("ScrollingFrame")
 dropFrame.Size = UDim2.new(1, -20, 0, 100)
@@ -153,11 +188,7 @@ controlBtn.Font = Enum.Font.SourceSansBold
 controlBtn.TextSize = 14
 controlBtn.Parent = mainFrame
 
-local controlCorner = Instance.new("UICorner")
-controlCorner.CornerRadius = UDim.new(0, 6)
-controlCorner.Parent = controlBtn
-
--- Session Controls
+-- Session Overlay
 local sessionFrame = Instance.new("Frame")
 sessionFrame.Size = UDim2.new(0, 140, 0, 110)
 sessionFrame.Position = UDim2.new(0, 10, 0.5, -55)
@@ -167,10 +198,6 @@ sessionFrame.BorderSizePixel = 0
 sessionFrame.Active = true
 sessionFrame.Draggable = true
 sessionFrame.Parent = sessionGui
-
-local sessionCorner = Instance.new("UICorner")
-sessionCorner.CornerRadius = UDim.new(0, 8)
-sessionCorner.Parent = sessionFrame
 
 local sessionLayout = Instance.new("UIListLayout")
 sessionLayout.Padding = UDim.new(0, 5)
@@ -205,14 +232,14 @@ leaveBtn.Font = Enum.Font.SourceSansBold
 leaveBtn.TextSize = 12
 leaveBtn.Parent = sessionFrame
 
-for _, btn in ipairs({stopBtn, resetBtn, leaveBtn}) do
+for _, btn in ipairs({stopBtn, resetBtn, leaveBtn, controlBtn, dropBtn, closeBtn}) do
     local c = Instance.new("UICorner")
     c.CornerRadius = UDim.new(0, 4)
     c.Parent = btn
 end
 
 --------------------------------------------------------------------------------
--- HELPER FUNCTIONS
+-- MANAGEMENT ENGINE
 --------------------------------------------------------------------------------
 local function setCharacterVisibility(character, visible)
     if not character then return end
@@ -225,10 +252,7 @@ local function setCharacterVisibility(character, visible)
 end
 
 local function cleanPreviousTarget()
-    if visConnection then 
-        visConnection:Disconnect() 
-        visConnection = nil 
-    end
+    if visConnection then visConnection:Disconnect() visConnection = nil end
     if targetPlayer and targetPlayer.Character then
         setCharacterVisibility(targetPlayer.Character, true)
     end
@@ -288,34 +312,22 @@ local function spawnCloneForTarget(target)
         end
     end
 
-    -- Re-enable local animations safely
-    local animScript = newClone:FindFirstChild("Animate")
-    if animScript then
-        local cAnim = animScript:Clone()
-        animScript:Destroy()
-        cAnim.Disabled = false
-        cAnim.Parent = newClone
-    end
-
+    loadManualAnimations(newClone)
     return newClone
 end
 
 --------------------------------------------------------------------------------
--- CORE CONTROLLER
+-- MOVEMENT & PHYSICS CONTROLLER
 --------------------------------------------------------------------------------
 local function stopControlSession(destroyClone)
     controlling = false
     if renderConnection then renderConnection:Disconnect() renderConnection = nil end
 
-    if destroyClone then
-        cleanPreviousTarget()
-    end
+    if destroyClone then cleanPreviousTarget() end
 
     if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
         localPlayer.Character.HumanoidRootPart.Anchored = false
-        if originalCFrame then
-            localPlayer.Character.HumanoidRootPart.CFrame = originalCFrame
-        end
+        if originalCFrame then localPlayer.Character.HumanoidRootPart.CFrame = originalCFrame end
         if localPlayer.Character:FindFirstChildOfClass("Humanoid") then
             camera.CameraType = Enum.CameraType.Custom
             camera.CameraSubject = localPlayer.Character:FindFirstChildOfClass("Humanoid")
@@ -360,42 +372,58 @@ local function startControlSession()
         camera.CameraType = Enum.CameraType.Custom
         camera.CameraSubject = fakeHumanoid
 
+        local speed = 16
+        local verticalVelocity = 0
         local lastFootstep = 0
-        local wasJumping = false
+        local isGrounded = true
 
-        renderConnection = RunService.RenderStepped:Connect(function()
-            if not controlling or not fakeHumanoid or not fakeHrp then return end
+        renderConnection = RunService.RenderStepped:Connect(function(dt)
+            if not controlling or not fakeHrp then return end
 
             local camCFrame = camera.CFrame
             local camLook = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
             local camRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
 
-            local moveDirection = Vector3.zero
+            local moveDir = Vector3.zero
 
-            -- Keyboard Inputs (Fixed Forward = W, Backward = S, Right = D, Left = A)
-            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDirection = moveDirection + camLook end
-            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDirection = moveDirection - camLook end
-            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDirection = moveDirection + camRight end
-            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDirection = moveDirection - camRight end
+            -- Correct Camera-Relative Directions (W = forward, S = backward, D = right, A = left)
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + camLook end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - camLook end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + camRight end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - camRight end
 
-            -- Apply Movement
-            if moveDirection.Magnitude > 0 then
-                fakeHumanoid:Move(moveDirection.Unit, false)
-                if tick() - lastFootstep > 0.35 and fakeHumanoid.FloorMaterial ~= Enum.Material.Air then
+            -- Raycast Downward for Custom Ground Physics
+            local ray = Ray.new(fakeHrp.Position, Vector3.new(0, -3.5, 0))
+            local hitPart = Workspace:FindPartOnRayWithIgnoreList(ray, {fakeChar, localPlayer.Character})
+            isGrounded = hitPart ~= nil
+
+            -- Gravity / Jumping Physics
+            if isGrounded then
+                if verticalVelocity < 0 then verticalVelocity = 0 end
+                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                    verticalVelocity = 50
+                    playLocalSound(SOUNDS.Jump, 0.6, fakeHrp)
+                end
+            else
+                verticalVelocity = verticalVelocity - (196.2 * dt)
+            end
+
+            -- Manual Position & Rotation Update
+            if moveDir.Magnitude > 0 then
+                moveDir = moveDir.Unit
+                local targetCFrame = CFrame.new(fakeHrp.Position, fakeHrp.Position + moveDir)
+                fakeHrp.CFrame = fakeHrp.CFrame:Lerp(targetCFrame, 0.25) + (moveDir * speed * dt) + Vector3.new(0, verticalVelocity * dt, 0)
+                
+                playTrack("Walk")
+                
+                if tick() - lastFootstep > 0.35 and isGrounded then
                     playLocalSound(SOUNDS.Footstep, 0.4, fakeHrp)
                     lastFootstep = tick()
                 end
             else
-                fakeHumanoid:Move(Vector3.zero, false)
+                fakeHrp.CFrame = fakeHrp.CFrame + Vector3.new(0, verticalVelocity * dt, 0)
+                playTrack("Idle")
             end
-
-            -- Apply Jump
-            local isJumping = UserInputService:IsKeyDown(Enum.KeyCode.Space)
-            if isJumping and not wasJumping and fakeHumanoid.FloorMaterial ~= Enum.Material.Air then
-                fakeHumanoid.Jump = true
-                playLocalSound(SOUNDS.Jump, 0.6, fakeHrp)
-            end
-            wasJumping = isJumping
         end)
     end
 
@@ -419,12 +447,8 @@ resetBtn.MouseButton1Click:Connect(function()
         if hum and hrp then
             playLocalSound(SOUNDS.Oof, 1, hrp)
             for _, descendant in ipairs(fakeChar:GetDescendants()) do
-                if descendant:IsA("Motor6D") then
-                    descendant:Destroy()
-                end
+                if descendant:IsA("Motor6D") then descendant:Destroy() end
             end
-            hum:ChangeState(Enum.HumanoidStateType.Dead)
-            hum.Health = 0
         end
 
         task.wait(1.2)
@@ -438,14 +462,9 @@ resetBtn.MouseButton1Click:Connect(function()
 end)
 
 leaveBtn.MouseButton1Click:Connect(function()
-    if fakeChar then
-        fakeChar:Destroy()
-        fakeChar = nil
-    end
-
+    if fakeChar then fakeChar:Destroy() fakeChar = nil end
     camera.CameraType = Enum.CameraType.Scriptable
     task.wait(3)
-
     stopControlSession(true)
 end)
 
