@@ -1,988 +1,319 @@
---[[
-    LOCAL PLAYER CONTROL ILLUSION
-    Roblox Studio LocalScript
-    Place in StarterPlayer > StarterPlayerScripts
+-- Local Simulation Control Script (Visual Only)
+local getService = function(service)
+    return (cloneref and cloneref(game:GetService(service))) or game:GetService(service)
+end
 
-    PC:
-      W A S D = movement
-      SPACE   = jump
-      Mouse   = camera
+local Players = getService("Players")
+local Workspace = getService("Workspace")
+local UserInputService = getService("UserInputService")
+local RunService = getService("RunService")
+local SoundService = getService("SoundService")
+local CoreGui = getService("CoreGui")
 
-    Mobile:
-      Left joystick = movement
-      JUMP button   = jump
-      Normal Roblox touch camera = camera
+local localPlayer = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
 
-    Everything involving the selected player is local-only.
-]]
-
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-
-local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-
-local Camera = workspace.CurrentCamera
-
+-- Global States
 local controlling = false
-local selectedPlayer = nil
-local puppet = nil
+local targetPlayer = nil
+local fakeChar = nil
+local originalCFrame = nil
+local moveConnection = nil
+local renderConnection = nil
 
-local originalCharacter = nil
-local originalRoot = nil
+-- Clean up existing UIs
+local guiParent = (gethui and gethui()) or CoreGui or localPlayer:WaitForChild("PlayerGui")
+if guiParent:FindFirstChild("FakeControlMainGUI") then guiParent.FakeControlMainGUI:Destroy() end
+if guiParent:FindFirstChild("FakeControlSessionGUI") then guiParent.FakeControlSessionGUI:Destroy() end
 
-local hiddenCharacter = nil
+--------------------------------------------------------------------------------
+-- UI CREATION HELPERS
+--------------------------------------------------------------------------------
+local mainGui = Instance.new("ScreenGui")
+mainGui.Name = "FakeControlMainGUI"
+mainGui.ResetOnSpawn = false
+mainGui.Parent = guiParent
 
-local keys = {
-	W = false,
-	A = false,
-	S = false,
-	D = false
-}
+local sessionGui = Instance.new("ScreenGui")
+sessionGui.Name = "FakeControlSessionGUI"
+sessionGui.ResetOnSpawn = false
+sessionGui.Enabled = false
+sessionGui.Parent = guiParent
 
-local mobileMove = Vector2.zero
-local mobileTouch = nil
+-- Main Selection Window
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 220, 0, 130)
+mainFrame.Position = UDim2.new(0.05, 0, 0.3, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Parent = mainGui
 
-local animationTracks = {}
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 8)
+mainCorner.Parent = mainFrame
 
---==================================================
--- HELPERS
---==================================================
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, 0, 0, 30)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "Player Control (Visual Only)"
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.Font = Enum.Font.SourceSansBold
+titleLabel.TextSize = 14
+titleLabel.Parent = mainFrame
 
-local function getHumanoid(character)
-	if not character then
-		return nil
-	end
+local dropBtn = Instance.new("TextButton")
+dropBtn.Size = UDim2.new(1, -20, 0, 30)
+dropBtn.Position = UDim2.new(0, 10, 0, 35)
+dropBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+dropBtn.Text = "Select Player ▼"
+dropBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+dropBtn.Font = Enum.Font.SourceSans
+dropBtn.TextSize = 13
+dropBtn.Parent = mainFrame
 
-	return character:FindFirstChildOfClass("Humanoid")
+local dropCorner = Instance.new("UICorner")
+dropCorner.CornerRadius = UDim.new(0, 6)
+dropCorner.Parent = dropBtn
+
+local dropFrame = Instance.new("ScrollingFrame")
+dropFrame.Size = UDim2.new(1, -20, 0, 100)
+dropFrame.Position = UDim2.new(0, 10, 0, 68)
+dropFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+dropFrame.Visible = false
+dropFrame.ZIndex = 10
+dropFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+dropFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+dropFrame.Parent = mainFrame
+
+local dropLayout = Instance.new("UIListLayout")
+dropLayout.Parent = dropFrame
+
+local controlBtn = Instance.new("TextButton")
+controlBtn.Size = UDim2.new(1, -20, 0, 30)
+controlBtn.Position = UDim2.new(0, 10, 0, 80)
+controlBtn.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+controlBtn.Text = "Control Player"
+controlBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+controlBtn.Font = Enum.Font.SourceSansBold
+controlBtn.TextSize = 14
+controlBtn.Parent = mainFrame
+
+local controlCorner = Instance.new("UICorner")
+controlCorner.CornerRadius = UDim.new(0, 6)
+controlCorner.Parent = controlBtn
+
+-- Session Bar Window (Left-Middle Alignment)
+local sessionFrame = Instance.new("Frame")
+sessionFrame.Size = UDim2.new(0, 140, 0, 110)
+sessionFrame.Position = UDim2.new(0, 10, 0.5, -55)
+sessionFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+sessionFrame.BackgroundTransparency = 0.2
+sessionFrame.BorderSizePixel = 0
+sessionFrame.Parent = sessionGui
+
+local sessionCorner = Instance.new("UICorner")
+sessionCorner.CornerRadius = UDim.new(0, 8)
+sessionCorner.Parent = sessionFrame
+
+local sessionLayout = Instance.new("UIListLayout")
+sessionLayout.Padding = UDim.new(0, 5)
+sessionLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+sessionLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+sessionLayout.Parent = sessionFrame
+
+local stopBtn = Instance.new("TextButton")
+stopBtn.Size = UDim2.new(0, 120, 0, 28)
+stopBtn.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
+stopBtn.Text = "Stop Controlling"
+stopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+stopBtn.Font = Enum.Font.SourceSansBold
+stopBtn.TextSize = 12
+stopBtn.Parent = sessionFrame
+
+local resetBtn = Instance.new("TextButton")
+resetBtn.Size = UDim2.new(0, 120, 0, 28)
+resetBtn.BackgroundColor3 = Color3.fromRGB(230, 126, 34)
+resetBtn.Text = "Fake Reset"
+resetBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+resetBtn.Font = Enum.Font.SourceSansBold
+resetBtn.TextSize = 12
+resetBtn.Parent = sessionFrame
+
+local leaveBtn = Instance.new("TextButton")
+leaveBtn.Size = UDim2.new(0, 120, 0, 28)
+leaveBtn.BackgroundColor3 = Color3.fromRGB(142, 68, 173)
+leaveBtn.Text = "Fake Leave"
+leaveBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+leaveBtn.Font = Enum.Font.SourceSansBold
+leaveBtn.TextSize = 12
+leaveBtn.Parent = sessionFrame
+
+for _, btn in ipairs({stopBtn, resetBtn, leaveBtn}) do
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 4)
+    c.Parent = btn
 end
 
-local function getRoot(character)
-	if not character then
-		return nil
-	end
+--------------------------------------------------------------------------------
+-- DROPDOWN MANAGEMENT
+--------------------------------------------------------------------------------
+local selectedPlr = nil
 
-	return character:FindFirstChild("HumanoidRootPart")
+local function updateDropdown()
+    for _, child in ipairs(dropFrame:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= localPlayer then
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(1, 0, 0, 24)
+            btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+            btn.Text = plr.DisplayName .. " (@" .. plr.Name .. ")"
+            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            btn.Font = Enum.Font.SourceSans
+            btn.TextSize = 12
+            btn.ZIndex = 11
+            btn.Parent = dropFrame
+
+            btn.MouseButton1Click:Connect(function()
+                selectedPlr = plr
+                dropBtn.Text = plr.Name .. " ▼"
+                dropFrame.Visible = false
+            end)
+        end
+    end
 end
 
-local function corner(object, radius)
-	local c = Instance.new("UICorner")
-	c.CornerRadius = UDim.new(0, radius)
-	c.Parent = object
-end
-
-local function hideLocally(character)
-	if not character then
-		return
-	end
-
-	for _, object in ipairs(character:GetDescendants()) do
-		if object:IsA("BasePart") then
-			object.LocalTransparencyModifier = 1
-		elseif object:IsA("Decal") or object:IsA("Texture") then
-			object.Transparency = 1
-		end
-	end
-end
-
-local function showLocally(character)
-	if not character then
-		return
-	end
-
-	for _, object in ipairs(character:GetDescendants()) do
-		if object:IsA("BasePart") then
-			object.LocalTransparencyModifier = 0
-		elseif object:IsA("Decal") or object:IsA("Texture") then
-			object.Transparency = 0
-		end
-	end
-end
-
---==================================================
--- GUI
---==================================================
-
-local gui = Instance.new("ScreenGui")
-gui.Name = "LocalControlUI"
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.Parent = PlayerGui
-
---==================================================
--- MAIN UI
---==================================================
-
-local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(320, 210)
-main.Position = UDim2.new(0.5, -160, 0.5, -105)
-main.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
-main.BorderSizePixel = 0
-main.Parent = gui
-
-corner(main, 12)
-
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -20, 0, 35)
-title.Position = UDim2.fromOffset(10, 8)
-title.BackgroundTransparency = 1
-title.Text = "Player Control"
-title.TextColor3 = Color3.new(1, 1, 1)
-title.TextSize = 21
-title.Font = Enum.Font.GothamBold
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.Parent = main
-
-local dropdown = Instance.new("TextButton")
-dropdown.Size = UDim2.new(1, -20, 0, 38)
-dropdown.Position = UDim2.fromOffset(10, 52)
-dropdown.BackgroundColor3 = Color3.fromRGB(42, 42, 50)
-dropdown.BorderSizePixel = 0
-dropdown.Text = "Select Player ▼"
-dropdown.TextColor3 = Color3.new(1, 1, 1)
-dropdown.TextSize = 14
-dropdown.Font = Enum.Font.Gotham
-dropdown.Parent = main
-
-corner(dropdown, 8)
-
-local playerList = Instance.new("ScrollingFrame")
-playerList.Size = UDim2.new(1, -20, 0, 105)
-playerList.Position = UDim2.fromOffset(10, 94)
-playerList.BackgroundColor3 = Color3.fromRGB(32, 32, 38)
-playerList.BorderSizePixel = 0
-playerList.ScrollBarThickness = 5
-playerList.Visible = false
-playerList.Parent = main
-
-corner(playerList, 8)
-
-local layout = Instance.new("UIListLayout")
-layout.Padding = UDim.new(0, 3)
-layout.Parent = playerList
-
-local controlButton = Instance.new("TextButton")
-controlButton.Size = UDim2.new(1, -20, 0, 38)
-controlButton.Position = UDim2.new(0, 10, 1, -48)
-controlButton.BackgroundColor3 = Color3.fromRGB(55, 120, 255)
-controlButton.BorderSizePixel = 0
-controlButton.Text = "CONTROL"
-controlButton.TextColor3 = Color3.new(1, 1, 1)
-controlButton.TextSize = 15
-controlButton.Font = Enum.Font.GothamBold
-controlButton.Parent = main
-
-corner(controlButton, 8)
-
---==================================================
--- SESSION UI
---==================================================
-
-local session = Instance.new("Frame")
-session.Size = UDim2.fromOffset(245, 180)
-session.Position = UDim2.new(1, -265, 0.5, -90)
-session.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
-session.BorderSizePixel = 0
-session.Visible = false
-session.Parent = gui
-
-corner(session, 12)
-
-local sessionTitle = Instance.new("TextLabel")
-sessionTitle.Size = UDim2.new(1, -20, 0, 32)
-sessionTitle.Position = UDim2.fromOffset(10, 8)
-sessionTitle.BackgroundTransparency = 1
-sessionTitle.Text = "CONTROL SESSION"
-sessionTitle.TextColor3 = Color3.new(1, 1, 1)
-sessionTitle.TextSize = 17
-sessionTitle.Font = Enum.Font.GothamBold
-sessionTitle.TextXAlignment = Enum.TextXAlignment.Left
-sessionTitle.Parent = session
-
-local sessionPlayer = Instance.new("TextLabel")
-sessionPlayer.Size = UDim2.new(1, -20, 0, 25)
-sessionPlayer.Position = UDim2.fromOffset(10, 39)
-sessionPlayer.BackgroundTransparency = 1
-sessionPlayer.Text = ""
-sessionPlayer.TextColor3 = Color3.fromRGB(175, 175, 175)
-sessionPlayer.TextSize = 13
-sessionPlayer.Font = Enum.Font.Gotham
-sessionPlayer.TextXAlignment = Enum.TextXAlignment.Left
-sessionPlayer.Parent = session
-
-local resetButton = Instance.new("TextButton")
-resetButton.Size = UDim2.new(1, -20, 0, 30)
-resetButton.Position = UDim2.fromOffset(10, 68)
-resetButton.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
-resetButton.BorderSizePixel = 0
-resetButton.Text = "RESET"
-resetButton.TextColor3 = Color3.new(1, 1, 1)
-resetButton.TextSize = 13
-resetButton.Font = Enum.Font.GothamBold
-resetButton.Parent = session
-
-corner(resetButton, 7)
-
-local leaveButton = Instance.new("TextButton")
-leaveButton.Size = UDim2.new(1, -20, 0, 30)
-leaveButton.Position = UDim2.fromOffset(10, 103)
-leaveButton.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
-leaveButton.BorderSizePixel = 0
-leaveButton.Text = "LEAVE"
-leaveButton.TextColor3 = Color3.new(1, 1, 1)
-leaveButton.TextSize = 13
-leaveButton.Font = Enum.Font.GothamBold
-leaveButton.Parent = session
-
-corner(leaveButton, 7)
-
-local stopButton = Instance.new("TextButton")
-stopButton.Size = UDim2.new(1, -20, 0, 30)
-stopButton.Position = UDim2.fromOffset(10, 138)
-stopButton.BackgroundColor3 = Color3.fromRGB(180, 65, 65)
-stopButton.BorderSizePixel = 0
-stopButton.Text = "STOP CONTROLLING"
-stopButton.TextColor3 = Color3.new(1, 1, 1)
-stopButton.TextSize = 12
-stopButton.Font = Enum.Font.GothamBold
-stopButton.Parent = session
-
-corner(stopButton, 7)
-
---==================================================
--- MOBILE CONTROLS
---==================================================
-
-local mobileControls = Instance.new("Frame")
-mobileControls.Name = "MobileControls"
-mobileControls.Size = UDim2.fromScale(1, 1)
-mobileControls.BackgroundTransparency = 1
-mobileControls.Visible = false
-mobileControls.Parent = gui
-
-local movePad = Instance.new("Frame")
-movePad.Size = UDim2.fromOffset(150, 150)
-movePad.Position = UDim2.new(0, 25, 1, -175)
-movePad.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
-movePad.BackgroundTransparency = 0.25
-movePad.BorderSizePixel = 0
-movePad.Parent = mobileControls
-
-corner(movePad, 75)
-
-local moveKnob = Instance.new("Frame")
-moveKnob.Size = UDim2.fromOffset(60, 60)
-moveKnob.Position = UDim2.new(0.5, -30, 0.5, -30)
-moveKnob.BackgroundColor3 = Color3.fromRGB(100, 100, 110)
-moveKnob.BackgroundTransparency = 0.15
-moveKnob.BorderSizePixel = 0
-moveKnob.Parent = movePad
-
-corner(moveKnob, 30)
-
-local jumpButton = Instance.new("TextButton")
-jumpButton.Size = UDim2.fromOffset(85, 85)
-jumpButton.Position = UDim2.new(1, -120, 1, -125)
-jumpButton.BackgroundColor3 = Color3.fromRGB(55, 120, 255)
-jumpButton.BackgroundTransparency = 0.15
-jumpButton.BorderSizePixel = 0
-jumpButton.Text = "JUMP"
-jumpButton.TextColor3 = Color3.new(1, 1, 1)
-jumpButton.TextSize = 15
-jumpButton.Font = Enum.Font.GothamBold
-jumpButton.Parent = mobileControls
-
-corner(jumpButton, 42)
-
--- Only show mobile controls on touch devices.
-local isMobile = UserInputService.TouchEnabled
-
---==================================================
--- PLAYER LIST
---==================================================
-
-local function refreshPlayers()
-	for _, child in ipairs(playerList:GetChildren()) do
-		if child:IsA("TextButton") then
-			child:Destroy()
-		end
-	end
-
-	local count = 0
-
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= LocalPlayer then
-			count += 1
-
-			local button = Instance.new("TextButton")
-			button.Size = UDim2.new(1, -8, 0, 30)
-			button.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-			button.BorderSizePixel = 0
-			button.Text = player.DisplayName .. "  @" .. player.Name
-			button.TextColor3 = Color3.new(1, 1, 1)
-			button.TextSize = 13
-			button.Font = Enum.Font.Gotham
-			button.Parent = playerList
-
-			corner(button, 6)
-
-			button.MouseButton1Click:Connect(function()
-				selectedPlayer = player
-				dropdown.Text = player.DisplayName .. "  @" .. player.Name
-				playerList.Visible = false
-			end)
-		end
-	end
-
-	playerList.CanvasSize = UDim2.fromOffset(0, count * 33)
-end
-
-refreshPlayers()
-
-Players.PlayerAdded:Connect(refreshPlayers)
-
-Players.PlayerRemoving:Connect(function(player)
-	if selectedPlayer == player then
-		selectedPlayer = nil
-		dropdown.Text = "Select Player ▼"
-	end
-
-	refreshPlayers()
+dropBtn.MouseButton1Click:Connect(function()
+    if not dropFrame.Visible then updateDropdown() end
+    dropFrame.Visible = not dropFrame.Visible
 end)
 
-dropdown.MouseButton1Click:Connect(function()
-	playerList.Visible = not playerList.Visible
-end)
+--------------------------------------------------------------------------------
+-- CONTROL & SIMULATION ENGINE
+--------------------------------------------------------------------------------
+local function stopControlSession()
+    controlling = false
+    if renderConnection then renderConnection:Disconnect() renderConnection = nil end
 
---==================================================
--- LOCAL PUPPET
---==================================================
+    -- Destroy visual character clone
+    if fakeChar then
+        fakeChar:Destroy()
+        fakeChar = nil
+    end
 
-local function createPuppet(player)
-	local character = player.Character
+    -- Restore Target Real Character Visually
+    if targetPlayer and targetPlayer.Character then
+        for _, part in ipairs(targetPlayer.Character:GetDescendants()) do
+            if part:IsA("BasePart") or part:IsA("Decal") then
+                part.LocalTransparencyModifier = 0
+            end
+        end
+    end
 
-	if not character then
-		return nil
-	end
+    -- Unanchor Local Character & Reset Camera
+    if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        localPlayer.Character.HumanoidRootPart.Anchored = false
+        if originalCFrame then
+            localPlayer.Character.HumanoidRootPart.CFrame = originalCFrame
+        end
+        if localPlayer.Character:FindFirstChildOfClass("Humanoid") then
+            camera.CameraSubject = localPlayer.Character:FindFirstChildOfClass("Humanoid")
+        end
+    end
 
-	local targetRoot = getRoot(character)
-	local targetHumanoid = getHumanoid(character)
-
-	if not targetRoot or not targetHumanoid then
-		return nil
-	end
-
-	character.Archivable = true
-
-	local clone = character:Clone()
-
-	if not clone then
-		return nil
-	end
-
-	clone.Name = "__LocalVisualPuppet"
-
-	local cloneRoot = getRoot(clone)
-
-	if not cloneRoot then
-		clone:Destroy()
-		return nil
-	end
-
-	clone.Parent = workspace
-	cloneRoot.CFrame = targetRoot.CFrame
-
-	for _, object in ipairs(clone:GetDescendants()) do
-		if object:IsA("Script")
-			or object:IsA("LocalScript")
-			or object:IsA("ModuleScript") then
-
-			object.Disabled = true
-
-		elseif object:IsA("BasePart") then
-			object.CanCollide = false
-			object.CanTouch = false
-			object.CanQuery = false
-			object.Massless = true
-		end
-	end
-
-	local humanoid = getHumanoid(clone)
-
-	if humanoid then
-		humanoid.WalkSpeed = 11
-		humanoid.JumpPower = 50
-		humanoid.AutoRotate = true
-		humanoid.DisplayDistanceType =
-			Enum.HumanoidDisplayDistanceType.None
-	end
-
-	return clone
+    targetPlayer = nil
+    sessionGui.Enabled = false
+    mainGui.Enabled = true
 end
 
---==================================================
--- ANIMATIONS
---==================================================
+local function startControlSession()
+    if not selectedPlr or not selectedPlr.Character then return end
+    local realChar = selectedPlr.Character
+    local realHrp = realChar:FindFirstChild("HumanoidRootPart")
+    local myChar = localPlayer.Character
+    local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
 
-local function setupAnimations(character)
-	local humanoid = getHumanoid(character)
+    if not realHrp or not myHrp then return end
 
-	if not humanoid then
-		return
-	end
+    controlling = true
+    targetPlayer = selectedPlr
+    originalCFrame = myHrp.CFrame
 
-	local animator = humanoid:FindFirstChildOfClass("Animator")
+    -- Anchor Real Client-side Character on Server Position
+    myHrp.Anchored = true
 
-	if not animator then
-		animator = Instance.new("Animator")
-		animator.Parent = humanoid
-	end
+    -- Hide target player's original model locally so it doesn't duplicate visually
+    for _, part in ipairs(realChar:GetDescendants()) do
+        if part:IsA("BasePart") or part:IsA("Decal") then
+            part.LocalTransparencyModifier = 1
+        end
+    end
 
-	local ids = {
-		Idle = "rbxassetid://507766666",
-		Walk = "rbxassetid://507777826",
-		Run = "rbxassetid://507767714",
-		Jump = "rbxassetid://507765000",
-		Fall = "rbxassetid://507767968"
-	}
+    -- Create local clone of target player for client manipulation
+    realChar.Archivable = true
+    fakeChar = realChar:Clone()
+    realChar.Archivable = false
+    fakeChar.Parent = Workspace
 
-	for name, id in pairs(ids) do
-		local animation = Instance.new("Animation")
-		animation.AnimationId = id
+    local fakeHumanoid = fakeChar:FindFirstChildOfClass("Humanoid")
+    local fakeHrp = fakeChar:FindFirstChild("HumanoidRootPart")
 
-		local track = animator:LoadAnimation(animation)
+    -- Setup animations and camera
+    if fakeHumanoid and fakeHrp then
+        camera.CameraType = Enum.CameraType.Custom
+        camera.CameraSubject = fakeHumanoid
 
-		if name == "Idle" then
-			track.Priority = Enum.AnimationPriority.Idle
-			track.Looped = true
-		elseif name == "Walk" or name == "Run" then
-			track.Priority = Enum.AnimationPriority.Movement
-			track.Looped = true
-		else
-			track.Priority = Enum.AnimationPriority.Action
-		end
+        -- Client-side Animation and Input Handling Loop
+        renderConnection = RunService.RenderStepped:Connect(function()
+            if not controlling or not fakeHumanoid or not fakeHrp then return end
 
-		animationTracks[name] = track
-	end
+            local moveVector = Vector3.zero
+            local camCFrame = camera.CFrame
+            local forward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
+            local right = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
 
-	animationTracks.Idle:Play()
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveVector = moveVector + forward end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveVector = moveVector - forward end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveVector = moveVector + right end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveVector = moveVector - right end
+
+            if moveVector.Magnitude > 0 then
+                moveVector = moveVector.Unit
+                fakeHumanoid:Move(moveVector, false)
+            end
+
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                fakeHumanoid.Jump = true
+            end
+        end)
+    end
+
+    mainGui.Enabled = false
+    sessionGui.Enabled = true
 end
 
-local function stopAnimation(name)
-	local track = animationTracks[name]
+--------------------------------------------------------------------------------
+-- EVENT BINDINGS
+--------------------------------------------------------------------------------
+controlBtn.MouseButton1Click:Connect(startControlSession)
+stopBtn.MouseButton1Click:Connect(stopControlSession)
 
-	if track and track.IsPlaying then
-		track:Stop(0.15)
-	end
-end
-
-local function playAnimation(name)
-	local track = animationTracks[name]
-
-	if track and not track.IsPlaying then
-		track:Play(0.15)
-	end
-end
-
-local function clearAnimations()
-	for _, track in pairs(animationTracks) do
-		pcall(function()
-			track:Stop()
-			track:Destroy()
-		end)
-	end
-
-	table.clear(animationTracks)
-end
-
-local function updateAnimations()
-	if not puppet then
-		return
-	end
-
-	local humanoid = getHumanoid(puppet)
-
-	if not humanoid then
-		return
-	end
-
-	local state = humanoid:GetState()
-
-	if state == Enum.HumanoidStateType.Jumping then
-		stopAnimation("Idle")
-		stopAnimation("Walk")
-		stopAnimation("Run")
-		playAnimation("Jump")
-		return
-	end
-
-	if state == Enum.HumanoidStateType.Freefall then
-		stopAnimation("Idle")
-		stopAnimation("Walk")
-		stopAnimation("Run")
-		playAnimation("Fall")
-		return
-	end
-
-	if humanoid.MoveDirection.Magnitude > 0.05 then
-		stopAnimation("Idle")
-
-		if humanoid.WalkSpeed >= 15 then
-			stopAnimation("Walk")
-			playAnimation("Run")
-		else
-			stopAnimation("Run")
-			playAnimation("Walk")
-		end
-	else
-		stopAnimation("Walk")
-		stopAnimation("Run")
-		playAnimation("Idle")
-	end
-end
-
---==================================================
--- INPUT VECTOR
---==================================================
-
-local function getInputVector()
-	local x = 0
-	local z = 0
-
-	-- PC keyboard
-	if keys.A then
-		x -= 1
-	end
-
-	if keys.D then
-		x += 1
-	end
-
-	if keys.W then
-		z -= 1
-	end
-
-	if keys.S then
-		z += 1
-	end
-
-	-- Mobile joystick
-	if mobileMove.Magnitude > 0.05 then
-		x += mobileMove.X
-		z += mobileMove.Y
-	end
-
-	local vector = Vector3.new(x, 0, z)
-
-	if vector.Magnitude > 1 then
-		vector = vector.Unit
-	end
-
-	return vector
-end
-
---==================================================
--- MOVEMENT
---==================================================
-
-local function updateMovement()
-	if not controlling or not puppet then
-		return
-	end
-
-	local humanoid = getHumanoid(puppet)
-
-	if not humanoid then
-		return
-	end
-
-	local inputVector = getInputVector()
-
-	if inputVector.Magnitude <= 0.01 then
-		humanoid:Move(Vector3.zero, false)
-		return
-	end
-
-	local camera = workspace.CurrentCamera
-
-	local forward = Vector3.new(
-		camera.CFrame.LookVector.X,
-		0,
-		camera.CFrame.LookVector.Z
-	)
-
-	local right = Vector3.new(
-		camera.CFrame.RightVector.X,
-		0,
-		camera.CFrame.RightVector.Z
-	)
-
-	if forward.Magnitude > 0 then
-		forward = forward.Unit
-	end
-
-	if right.Magnitude > 0 then
-		right = right.Unit
-	end
-
-	local direction =
-		(forward * -inputVector.Z)
-		+ (right * inputVector.X)
-
-	if direction.Magnitude > 0 then
-		direction = direction.Unit
-	end
-
-	humanoid:Move(direction, false)
-end
-
---==================================================
--- MOBILE JOYSTICK
---==================================================
-
-local function updateJoystick(position)
-	local center =
-		movePad.AbsolutePosition +
-		(movePad.AbsoluteSize / 2)
-
-	local offset = position - center
-	local radius = movePad.AbsoluteSize.X / 2
-
-	if offset.Magnitude > radius then
-		offset = offset.Unit * radius
-	end
-
-	mobileMove = Vector2.new(
-		offset.X / radius,
-		offset.Y / radius
-	)
-
-	moveKnob.Position = UDim2.fromOffset(
-		movePad.AbsoluteSize.X / 2 + offset.X - 30,
-		movePad.AbsoluteSize.Y / 2 + offset.Y - 30
-	)
-end
-
-local function resetJoystick()
-	mobileMove = Vector2.zero
-	mobileTouch = nil
-
-	moveKnob.Position =
-		UDim2.new(0.5, -30, 0.5, -30)
-end
-
-movePad.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.Touch then
-		mobileTouch = input
-		updateJoystick(input.Position)
-	end
+resetBtn.MouseButton1Click:Connect(function()
+    if fakeChar and fakeChar:FindFirstChildOfClass("Humanoid") then
+        local hum = fakeChar:FindFirstChildOfClass("Humanoid")
+        hum:TakeDamage(100) -- Visual local break/reset
+        task.wait(1.5)
+        stopControlSession()
+    end
 end)
 
-UserInputService.TouchMoved:Connect(function(input)
-	if controlling and mobileTouch == input then
-		updateJoystick(input.Position)
-	end
+leaveBtn.MouseButton1Click:Connect(function()
+    if fakeChar then
+        fakeChar:Destroy()
+        fakeChar = nil
+    end
+    task.wait(0.5)
+    stopControlSession()
 end)
-
-UserInputService.TouchEnded:Connect(function(input)
-	if mobileTouch == input then
-		resetJoystick()
-	end
-end)
-
-jumpButton.MouseButton1Click:Connect(function()
-	if not controlling or not puppet then
-		return
-	end
-
-	local humanoid = getHumanoid(puppet)
-
-	if humanoid then
-		humanoid.Jump = true
-	end
-end)
-
---==================================================
--- START CONTROL
---==================================================
-
-local function startControl(player)
-	if controlling then
-		return
-	end
-
-	local targetCharacter = player.Character
-
-	if not targetCharacter then
-		return
-	end
-
-	local targetRoot = getRoot(targetCharacter)
-
-	if not targetRoot then
-		return
-	end
-
-	originalCharacter = LocalPlayer.Character
-
-	if not originalCharacter then
-		return
-	end
-
-	originalRoot = getRoot(originalCharacter)
-
-	if not originalRoot then
-		return
-	end
-
-	local newPuppet = createPuppet(player)
-
-	if not newPuppet then
-		return
-	end
-
-	puppet = newPuppet
-	selectedPlayer = player
-	controlling = true
-
-	-- Hide target ONLY locally.
-	hiddenCharacter = targetCharacter
-	hideLocally(hiddenCharacter)
-
-	-- Freeze your actual character locally.
-	originalRoot.Anchored = true
-
-	local humanoid = getHumanoid(puppet)
-
-	if humanoid then
-		Camera.CameraType = Enum.CameraType.Custom
-		Camera.CameraSubject = humanoid
-	end
-
-	setupAnimations(puppet)
-
-	sessionPlayer.Text =
-		"Controlling: " ..
-		player.DisplayName ..
-		"  @" ..
-		player.Name
-
-	main.Visible = false
-	session.Visible = true
-
-	if isMobile then
-		mobileControls.Visible = true
-	end
-end
-
---==================================================
--- STOP CONTROL
---==================================================
-
-local function stopControl()
-	if not controlling then
-		return
-	end
-
-	controlling = false
-
-	for key in pairs(keys) do
-		keys[key] = false
-	end
-
-	resetJoystick()
-
-	clearAnimations()
-
-	if hiddenCharacter and hiddenCharacter.Parent then
-		showLocally(hiddenCharacter)
-	end
-
-	hiddenCharacter = nil
-
-	if puppet then
-		puppet:Destroy()
-		puppet = nil
-	end
-
-	if originalRoot and originalRoot.Parent then
-		originalRoot.Anchored = false
-	end
-
-	Camera.CameraType = Enum.CameraType.Custom
-
-	if originalCharacter then
-		local humanoid = getHumanoid(originalCharacter)
-
-		if humanoid then
-			Camera.CameraSubject = humanoid
-		end
-	end
-
-	session.Visible = false
-	main.Visible = true
-	mobileControls.Visible = false
-
-	selectedPlayer = nil
-end
-
---==================================================
--- PC KEYBOARD
---==================================================
-
-UserInputService.InputBegan:Connect(function(input, processed)
-	if processed or not controlling then
-		return
-	end
-
-	if input.KeyCode == Enum.KeyCode.W then
-		keys.W = true
-
-	elseif input.KeyCode == Enum.KeyCode.A then
-		keys.A = true
-
-	elseif input.KeyCode == Enum.KeyCode.S then
-		keys.S = true
-
-	elseif input.KeyCode == Enum.KeyCode.D then
-		keys.D = true
-
-	elseif input.KeyCode == Enum.KeyCode.Space then
-		if puppet then
-			local humanoid = getHumanoid(puppet)
-
-			if humanoid then
-				humanoid.Jump = true
-			end
-		end
-	end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-	if input.KeyCode == Enum.KeyCode.W then
-		keys.W = false
-
-	elseif input.KeyCode == Enum.KeyCode.A then
-		keys.A = false
-
-	elseif input.KeyCode == Enum.KeyCode.S then
-		keys.S = false
-
-	elseif input.KeyCode == Enum.KeyCode.D then
-		keys.D = false
-	end
-end)
-
---==================================================
--- CONTROL BUTTON
---==================================================
-
-controlButton.MouseButton1Click:Connect(function()
-	if selectedPlayer then
-		startControl(selectedPlayer)
-	end
-end)
-
-stopButton.MouseButton1Click:Connect(function()
-	stopControl()
-end)
-
---==================================================
--- FAKE RESET
---==================================================
-
-resetButton.MouseButton1Click:Connect(function()
-	if not controlling or not puppet or not selectedPlayer then
-		return
-	end
-
-	local targetRoot = getRoot(selectedPlayer.Character)
-	local puppetRoot = getRoot(puppet)
-
-	if targetRoot and puppetRoot then
-		puppetRoot.CFrame = targetRoot.CFrame
-	end
-
-	local humanoid = getHumanoid(puppet)
-
-	if humanoid then
-		humanoid.Health = humanoid.MaxHealth
-		humanoid:Move(Vector3.zero, false)
-	end
-end)
-
---==================================================
--- FAKE LEAVE
---==================================================
-
-leaveButton.MouseButton1Click:Connect(function()
-	if not controlling or not puppet then
-		return
-	end
-
-	local root = getRoot(puppet)
-
-	if root then
-		local startCFrame = root.CFrame
-
-		for i = 1, 25 do
-			if not puppet or not puppet.Parent then
-				break
-			end
-
-			local currentRoot = getRoot(puppet)
-
-			if currentRoot then
-				currentRoot.CFrame =
-					startCFrame *
-					CFrame.new(
-						0,
-						i * 0.08,
-						-i * 0.12
-					)
-			end
-
-			task.wait(0.025)
-		end
-	end
-
-	stopControl()
-end)
-
---==================================================
--- RENDER LOOP
---==================================================
-
-RunService.RenderStepped:Connect(function()
-	if not controlling or not puppet then
-		return
-	end
-
-	updateMovement()
-	updateAnimations()
-
-	local humanoid = getHumanoid(puppet)
-
-	if humanoid then
-		Camera.CameraSubject = humanoid
-	end
-end)
-
---==================================================
--- RESPAWN CLEANUP
---==================================================
-
-LocalPlayer.CharacterAdded:Connect(function(character)
-	if controlling then
-		stopControl()
-	end
-
-	originalCharacter = character
-	originalRoot = getRoot(character)
-end)
-
--- Initial state
-if isMobile then
-	mobileControls.Visible = false
-end
