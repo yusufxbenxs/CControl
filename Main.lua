@@ -1,14 +1,9 @@
--- Cross-Platform Player Control Script (Fixed Target Switching & Animation Engine)
-local getService = function(service)
-    return (cloneref and cloneref(game:GetService(service))) or game:GetService(service)
-end
-
-local Players = getService("Players")
-local Workspace = getService("Workspace")
-local UserInputService = getService("UserInputService")
-local RunService = getService("RunService")
-local CoreGui = getService("CoreGui")
-local SoundService = getService("SoundService")
+-- PC Executor-Friendly Local Control Engine
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local SoundService = game:GetService("SoundService")
 
 local localPlayer = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
@@ -20,23 +15,44 @@ local fakeChar = nil
 local originalCFrame = nil
 local renderConnection = nil
 local visConnection = nil
+local selectedPlr = nil
 
--- Clean up existing UIs
-local guiParent = (gethui and gethui()) or CoreGui or localPlayer:WaitForChild("PlayerGui")
+-- Safe UI Parent Resolver for PC Executors
+local function getSafeGuiParent()
+    local success, result = pcall(function()
+        if gethui then return gethui() end
+        return game:GetService("CoreGui")
+    end)
+    if success and result then
+        -- Test if writing is allowed
+        local test = Instance.new("Folder")
+        local writeSuccess = pcall(function() test.Parent = result end)
+        if writeSuccess then
+            test:Destroy()
+            return result
+        end
+    end
+    return localPlayer:WaitForChild("PlayerGui")
+end
+
+local guiParent = getSafeGuiParent()
+
+-- Clean up older GUI instances
 if guiParent:FindFirstChild("ControlMainGUI") then guiParent.ControlMainGUI:Destroy() end
 if guiParent:FindFirstChild("ControlSessionGUI") then guiParent.ControlSessionGUI:Destroy() end
 
 --------------------------------------------------------------------------------
--- SOUND EFFECTS ENGINE
+-- SOUND SYSTEM
 --------------------------------------------------------------------------------
 local function playLocalSound(soundId, volume, parent)
-    local snd = Instance.new("Sound")
-    snd.SoundId = soundId
-    snd.Volume = volume or 1
-    snd.Parent = parent or SoundService
-    snd:Play()
-    snd.Ended:Connect(function() snd:Destroy() end)
-    return snd
+    pcall(function()
+        local snd = Instance.new("Sound")
+        snd.SoundId = soundId
+        snd.Volume = volume or 1
+        snd.Parent = parent or SoundService
+        snd:Play()
+        snd.Ended:Connect(function() snd:Destroy() end)
+    end)
 end
 
 local SOUNDS = {
@@ -46,16 +62,18 @@ local SOUNDS = {
 }
 
 --------------------------------------------------------------------------------
--- GUI SETUP
+-- GUI CREATION
 --------------------------------------------------------------------------------
 local mainGui = Instance.new("ScreenGui")
 mainGui.Name = "ControlMainGUI"
 mainGui.ResetOnSpawn = false
+mainGui.DisplayOrder = 999
 mainGui.Parent = guiParent
 
 local sessionGui = Instance.new("ScreenGui")
 sessionGui.Name = "ControlSessionGUI"
 sessionGui.ResetOnSpawn = false
+sessionGui.DisplayOrder = 999
 sessionGui.Enabled = false
 sessionGui.Parent = guiParent
 
@@ -66,6 +84,7 @@ mainFrame.Position = UDim2.new(0.05, 0, 0.3, 0)
 mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 mainFrame.BorderSizePixel = 0
 mainFrame.Active = true
+mainFrame.Draggable = true -- Standard executor drag support
 mainFrame.Parent = mainGui
 
 local mainCorner = Instance.new("UICorner")
@@ -76,7 +95,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -30, 0, 30)
 titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Player Control"
+titleLabel.Text = "Player Control (PC)"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.Font = Enum.Font.SourceSansBold
 titleLabel.TextSize = 14
@@ -138,13 +157,15 @@ local controlCorner = Instance.new("UICorner")
 controlCorner.CornerRadius = UDim.new(0, 6)
 controlCorner.Parent = controlBtn
 
--- Session Overlay
+-- Session Controls
 local sessionFrame = Instance.new("Frame")
 sessionFrame.Size = UDim2.new(0, 140, 0, 110)
 sessionFrame.Position = UDim2.new(0, 10, 0.5, -55)
 sessionFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 sessionFrame.BackgroundTransparency = 0.2
 sessionFrame.BorderSizePixel = 0
+sessionFrame.Active = true
+sessionFrame.Draggable = true
 sessionFrame.Parent = sessionGui
 
 local sessionCorner = Instance.new("UICorner")
@@ -191,10 +212,8 @@ for _, btn in ipairs({stopBtn, resetBtn, leaveBtn}) do
 end
 
 --------------------------------------------------------------------------------
--- HELPER FUNCTIONS & DROPDOWN MANAGEMENT
+-- HELPER FUNCTIONS
 --------------------------------------------------------------------------------
-local selectedPlr = nil
-
 local function setCharacterVisibility(character, visible)
     if not character then return end
     local alpha = visible and 0 or 1
@@ -237,7 +256,6 @@ local function updateDropdown()
             btn.Parent = dropFrame
 
             btn.MouseButton1Click:Connect(function()
-                -- When selecting a new target, clean old target references
                 if selectedPlr ~= plr then
                     cleanPreviousTarget()
                     selectedPlr = plr
@@ -253,19 +271,6 @@ dropBtn.MouseButton1Click:Connect(function()
     if not dropFrame.Visible then updateDropdown() end
     dropFrame.Visible = not dropFrame.Visible
 end)
-
-local function setupAnimations(char)
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return end
-
-    local animateScript = char:FindFirstChild("Animate")
-    if animateScript then
-        local cloneAnim = animateScript:Clone()
-        animateScript:Destroy()
-        cloneAnim.Disabled = false
-        cloneAnim.Parent = char
-    end
-end
 
 local function spawnCloneForTarget(target)
     if not target or not target.Character then return nil end
@@ -283,12 +288,20 @@ local function spawnCloneForTarget(target)
         end
     end
 
-    setupAnimations(newClone)
+    -- Re-enable local animations safely
+    local animScript = newClone:FindFirstChild("Animate")
+    if animScript then
+        local cAnim = animScript:Clone()
+        animScript:Destroy()
+        cAnim.Disabled = false
+        cAnim.Parent = newClone
+    end
+
     return newClone
 end
 
 --------------------------------------------------------------------------------
--- CORE CONTROLLER ENGINE
+-- CORE CONTROLLER
 --------------------------------------------------------------------------------
 local function stopControlSession(destroyClone)
     controlling = false
@@ -316,7 +329,6 @@ end
 local function startControlSession()
     if not selectedPlr or not selectedPlr.Character then return end
 
-    -- Reset previous target if target has changed
     if targetPlayer ~= selectedPlr then
         cleanPreviousTarget()
         targetPlayer = selectedPlr
@@ -330,7 +342,6 @@ local function startControlSession()
     originalCFrame = myHrp.CFrame
     myHrp.Anchored = true
 
-    -- Constant visibility enforcement for chosen target
     if visConnection then visConnection:Disconnect() end
     visConnection = RunService.RenderStepped:Connect(function()
         if targetPlayer and targetPlayer.Character then
@@ -361,19 +372,13 @@ local function startControlSession()
 
             local moveDirection = Vector3.zero
 
-            -- Keyboard Controls
+            -- Keyboard Inputs (Fixed Forward = W, Backward = S, Right = D, Left = A)
             if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDirection = moveDirection + camLook end
             if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDirection = moveDirection - camLook end
             if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDirection = moveDirection + camRight end
             if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDirection = moveDirection - camRight end
 
-            -- Mobile Touch Controller
-            local myHum = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
-            if myHum and myHum.MoveDirection.Magnitude > 0 then
-                moveDirection = myHum.MoveDirection
-            end
-
-            -- Apply Movement & Footstep Audio
+            -- Apply Movement
             if moveDirection.Magnitude > 0 then
                 fakeHumanoid:Move(moveDirection.Unit, false)
                 if tick() - lastFootstep > 0.35 and fakeHumanoid.FloorMaterial ~= Enum.Material.Air then
@@ -384,8 +389,8 @@ local function startControlSession()
                 fakeHumanoid:Move(Vector3.zero, false)
             end
 
-            -- Apply Jump & Jump Sound
-            local isJumping = UserInputService:IsKeyDown(Enum.KeyCode.Space) or (myHum and myHum.Jump)
+            -- Apply Jump
+            local isJumping = UserInputService:IsKeyDown(Enum.KeyCode.Space)
             if isJumping and not wasJumping and fakeHumanoid.FloorMaterial ~= Enum.Material.Air then
                 fakeHumanoid.Jump = true
                 playLocalSound(SOUNDS.Jump, 0.6, fakeHrp)
