@@ -1,4 +1,4 @@
--- Local Simulation Control Script (Visual Only)
+-- Cross-Platform Player Control Script (Client-Side Visual Simulation)
 local getService = function(service)
     return (cloneref and cloneref(game:GetService(service))) or game:GetService(service)
 end
@@ -7,7 +7,6 @@ local Players = getService("Players")
 local Workspace = getService("Workspace")
 local UserInputService = getService("UserInputService")
 local RunService = getService("RunService")
-local SoundService = getService("SoundService")
 local CoreGui = getService("CoreGui")
 
 local localPlayer = Players.LocalPlayer
@@ -18,31 +17,30 @@ local controlling = false
 local targetPlayer = nil
 local fakeChar = nil
 local originalCFrame = nil
-local moveConnection = nil
 local renderConnection = nil
 
 -- Clean up existing UIs
 local guiParent = (gethui and gethui()) or CoreGui or localPlayer:WaitForChild("PlayerGui")
-if guiParent:FindFirstChild("FakeControlMainGUI") then guiParent.FakeControlMainGUI:Destroy() end
-if guiParent:FindFirstChild("FakeControlSessionGUI") then guiParent.FakeControlSessionGUI:Destroy() end
+if guiParent:FindFirstChild("ControlMainGUI") then guiParent.ControlMainGUI:Destroy() end
+if guiParent:FindFirstChild("ControlSessionGUI") then guiParent.ControlSessionGUI:Destroy() end
 
 --------------------------------------------------------------------------------
--- UI CREATION HELPERS
+-- UI CREATION
 --------------------------------------------------------------------------------
 local mainGui = Instance.new("ScreenGui")
-mainGui.Name = "FakeControlMainGUI"
+mainGui.Name = "ControlMainGUI"
 mainGui.ResetOnSpawn = false
 mainGui.Parent = guiParent
 
 local sessionGui = Instance.new("ScreenGui")
-sessionGui.Name = "FakeControlSessionGUI"
+sessionGui.Name = "ControlSessionGUI"
 sessionGui.ResetOnSpawn = false
 sessionGui.Enabled = false
 sessionGui.Parent = guiParent
 
 -- Main Selection Window
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 220, 0, 130)
+mainFrame.Size = UDim2.new(0, 240, 0, 130)
 mainFrame.Position = UDim2.new(0.05, 0, 0.3, 0)
 mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 mainFrame.BorderSizePixel = 0
@@ -54,14 +52,32 @@ mainCorner.CornerRadius = UDim.new(0, 8)
 mainCorner.Parent = mainFrame
 
 local titleLabel = Instance.new("TextLabel")
-titleLabel.Size = UDim2.new(1, 0, 0, 30)
+titleLabel.Size = UDim2.new(1, -30, 0, 30)
+titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Player Control (Visual Only)"
+titleLabel.Text = "Player Control"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.Font = Enum.Font.SourceSansBold
 titleLabel.TextSize = 14
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
 titleLabel.Parent = mainFrame
 
+-- Close Button (X)
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 22, 0, 22)
+closeBtn.Position = UDim2.new(1, -26, 0, 4)
+closeBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+closeBtn.Text = "X"
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.Font = Enum.Font.SourceSansBold
+closeBtn.TextSize = 13
+closeBtn.Parent = mainFrame
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 4)
+closeCorner.Parent = closeBtn
+
+-- Dropdown Button
 local dropBtn = Instance.new("TextButton")
 dropBtn.Size = UDim2.new(1, -20, 0, 30)
 dropBtn.Position = UDim2.new(0, 10, 0, 35)
@@ -89,6 +105,7 @@ dropFrame.Parent = mainFrame
 local dropLayout = Instance.new("UIListLayout")
 dropLayout.Parent = dropFrame
 
+-- Control Start Button
 local controlBtn = Instance.new("TextButton")
 controlBtn.Size = UDim2.new(1, -20, 0, 30)
 controlBtn.Position = UDim2.new(0, 10, 0, 80)
@@ -103,7 +120,7 @@ local controlCorner = Instance.new("UICorner")
 controlCorner.CornerRadius = UDim.new(0, 6)
 controlCorner.Parent = controlBtn
 
--- Session Bar Window (Left-Middle Alignment)
+-- Session Window (Left-Middle Alignment)
 local sessionFrame = Instance.new("Frame")
 sessionFrame.Size = UDim2.new(0, 140, 0, 110)
 sessionFrame.Position = UDim2.new(0, 10, 0.5, -55)
@@ -134,7 +151,7 @@ stopBtn.Parent = sessionFrame
 local resetBtn = Instance.new("TextButton")
 resetBtn.Size = UDim2.new(0, 120, 0, 28)
 resetBtn.BackgroundColor3 = Color3.fromRGB(230, 126, 34)
-resetBtn.Text = "Fake Reset"
+resetBtn.Text = "Reset Character"
 resetBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 resetBtn.Font = Enum.Font.SourceSansBold
 resetBtn.TextSize = 12
@@ -143,7 +160,7 @@ resetBtn.Parent = sessionFrame
 local leaveBtn = Instance.new("TextButton")
 leaveBtn.Size = UDim2.new(0, 120, 0, 28)
 leaveBtn.BackgroundColor3 = Color3.fromRGB(142, 68, 173)
-leaveBtn.Text = "Fake Leave"
+leaveBtn.Text = "Leave Game"
 leaveBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 leaveBtn.Font = Enum.Font.SourceSansBold
 leaveBtn.TextSize = 12
@@ -191,19 +208,17 @@ dropBtn.MouseButton1Click:Connect(function()
 end)
 
 --------------------------------------------------------------------------------
--- CONTROL & SIMULATION ENGINE
+-- CONTROL ENGINE
 --------------------------------------------------------------------------------
 local function stopControlSession()
     controlling = false
     if renderConnection then renderConnection:Disconnect() renderConnection = nil end
 
-    -- Destroy visual character clone
     if fakeChar then
         fakeChar:Destroy()
         fakeChar = nil
     end
 
-    -- Restore Target Real Character Visually
     if targetPlayer and targetPlayer.Character then
         for _, part in ipairs(targetPlayer.Character:GetDescendants()) do
             if part:IsA("BasePart") or part:IsA("Decal") then
@@ -212,7 +227,6 @@ local function stopControlSession()
         end
     end
 
-    -- Unanchor Local Character & Reset Camera
     if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
         localPlayer.Character.HumanoidRootPart.Anchored = false
         if originalCFrame then
@@ -241,17 +255,14 @@ local function startControlSession()
     targetPlayer = selectedPlr
     originalCFrame = myHrp.CFrame
 
-    -- Anchor Real Client-side Character on Server Position
     myHrp.Anchored = true
 
-    -- Hide target player's original model locally so it doesn't duplicate visually
     for _, part in ipairs(realChar:GetDescendants()) do
         if part:IsA("BasePart") or part:IsA("Decal") then
             part.LocalTransparencyModifier = 1
         end
     end
 
-    -- Create local clone of target player for client manipulation
     realChar.Archivable = true
     fakeChar = realChar:Clone()
     realChar.Archivable = false
@@ -260,12 +271,11 @@ local function startControlSession()
     local fakeHumanoid = fakeChar:FindFirstChildOfClass("Humanoid")
     local fakeHrp = fakeChar:FindFirstChild("HumanoidRootPart")
 
-    -- Setup animations and camera
     if fakeHumanoid and fakeHrp then
         camera.CameraType = Enum.CameraType.Custom
         camera.CameraSubject = fakeHumanoid
 
-        -- Client-side Animation and Input Handling Loop
+        -- Universal Cross-Platform Loop (PC + Mobile Input)
         renderConnection = RunService.RenderStepped:Connect(function()
             if not controlling or not fakeHumanoid or not fakeHrp then return end
 
@@ -274,17 +284,24 @@ local function startControlSession()
             local forward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
             local right = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
 
+            -- 1. PC Keyboard Input
             if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveVector = moveVector + forward end
             if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveVector = moveVector - forward end
             if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveVector = moveVector + right end
             if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveVector = moveVector - right end
 
+            -- 2. Mobile Touch Thumbstick / On-Screen Control Input
+            local myHum = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if myHum and myHum.MoveDirection.Magnitude > 0 then
+                moveVector = myHum.MoveDirection
+            end
+
             if moveVector.Magnitude > 0 then
-                moveVector = moveVector.Unit
                 fakeHumanoid:Move(moveVector, false)
             end
 
-            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+            -- Jump Handling (PC Spacebar or Mobile Jump Button)
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) or (myHum and myHum.Jump) then
                 fakeHumanoid.Jump = true
             end
         end)
@@ -303,7 +320,7 @@ stopBtn.MouseButton1Click:Connect(stopControlSession)
 resetBtn.MouseButton1Click:Connect(function()
     if fakeChar and fakeChar:FindFirstChildOfClass("Humanoid") then
         local hum = fakeChar:FindFirstChildOfClass("Humanoid")
-        hum:TakeDamage(100) -- Visual local break/reset
+        hum:TakeDamage(100)
         task.wait(1.5)
         stopControlSession()
     end
@@ -316,4 +333,10 @@ leaveBtn.MouseButton1Click:Connect(function()
     end
     task.wait(0.5)
     stopControlSession()
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+    stopControlSession()
+    mainGui:Destroy()
+    sessionGui:Destroy()
 end)
