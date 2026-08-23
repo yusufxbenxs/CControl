@@ -1,4 +1,4 @@
--- Cross-Platform Player Control Script (Client-Side Visual Simulation)
+-- Cross-Platform Player Control Script (Fixed Target Switching & Animation Engine)
 local getService = function(service)
     return (cloneref and cloneref(game:GetService(service))) or game:GetService(service)
 end
@@ -46,7 +46,7 @@ local SOUNDS = {
 }
 
 --------------------------------------------------------------------------------
--- UI CREATION
+-- GUI SETUP
 --------------------------------------------------------------------------------
 local mainGui = Instance.new("ScreenGui")
 mainGui.Name = "ControlMainGUI"
@@ -83,7 +83,6 @@ titleLabel.TextSize = 14
 titleLabel.TextXAlignment = Enum.TextXAlignment.Left
 titleLabel.Parent = mainFrame
 
--- Close Button (X)
 local closeBtn = Instance.new("TextButton")
 closeBtn.Size = UDim2.new(0, 22, 0, 22)
 closeBtn.Position = UDim2.new(1, -26, 0, 4)
@@ -98,7 +97,6 @@ local closeCorner = Instance.new("UICorner")
 closeCorner.CornerRadius = UDim.new(0, 4)
 closeCorner.Parent = closeBtn
 
--- Dropdown
 local dropBtn = Instance.new("TextButton")
 dropBtn.Size = UDim2.new(1, -20, 0, 30)
 dropBtn.Position = UDim2.new(0, 10, 0, 35)
@@ -126,7 +124,6 @@ dropFrame.Parent = mainFrame
 local dropLayout = Instance.new("UIListLayout")
 dropLayout.Parent = dropFrame
 
--- Start Button
 local controlBtn = Instance.new("TextButton")
 controlBtn.Size = UDim2.new(1, -20, 0, 30)
 controlBtn.Position = UDim2.new(0, 10, 0, 80)
@@ -141,7 +138,7 @@ local controlCorner = Instance.new("UICorner")
 controlCorner.CornerRadius = UDim.new(0, 6)
 controlCorner.Parent = controlBtn
 
--- Session Window (Left-Middle)
+-- Session Overlay
 local sessionFrame = Instance.new("Frame")
 sessionFrame.Size = UDim2.new(0, 140, 0, 110)
 sessionFrame.Position = UDim2.new(0, 10, 0.5, -55)
@@ -194,9 +191,34 @@ for _, btn in ipairs({stopBtn, resetBtn, leaveBtn}) do
 end
 
 --------------------------------------------------------------------------------
--- HELPER FUNCTIONS & VISIBILITY
+-- HELPER FUNCTIONS & DROPDOWN MANAGEMENT
 --------------------------------------------------------------------------------
 local selectedPlr = nil
+
+local function setCharacterVisibility(character, visible)
+    if not character then return end
+    local alpha = visible and 0 or 1
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") or part:IsA("Decal") then
+            part.LocalTransparencyModifier = alpha
+        end
+    end
+end
+
+local function cleanPreviousTarget()
+    if visConnection then 
+        visConnection:Disconnect() 
+        visConnection = nil 
+    end
+    if targetPlayer and targetPlayer.Character then
+        setCharacterVisibility(targetPlayer.Character, true)
+    end
+    if fakeChar then
+        fakeChar:Destroy()
+        fakeChar = nil
+    end
+    targetPlayer = nil
+end
 
 local function updateDropdown()
     for _, child in ipairs(dropFrame:GetChildren()) do
@@ -215,7 +237,11 @@ local function updateDropdown()
             btn.Parent = dropFrame
 
             btn.MouseButton1Click:Connect(function()
-                selectedPlr = plr
+                -- When selecting a new target, clean old target references
+                if selectedPlr ~= plr then
+                    cleanPreviousTarget()
+                    selectedPlr = plr
+                end
                 dropBtn.Text = plr.Name .. " ▼"
                 dropFrame.Visible = false
             end)
@@ -228,19 +254,19 @@ dropBtn.MouseButton1Click:Connect(function()
     dropFrame.Visible = not dropFrame.Visible
 end)
 
-local function setCharacterVisibility(character, visible)
-    if not character then return end
-    local alpha = visible and 0 or 1
-    for _, part in ipairs(character:GetDescendants()) do
-        if part:IsA("BasePart") or part:IsA("Decal") then
-            part.LocalTransparencyModifier = alpha
-        end
+local function setupAnimations(char)
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    local animateScript = char:FindFirstChild("Animate")
+    if animateScript then
+        local cloneAnim = animateScript:Clone()
+        animateScript:Destroy()
+        cloneAnim.Disabled = false
+        cloneAnim.Parent = char
     end
 end
 
---------------------------------------------------------------------------------
--- CONTROL ENGINE
---------------------------------------------------------------------------------
 local function spawnCloneForTarget(target)
     if not target or not target.Character then return nil end
     local realChar = target.Character
@@ -257,26 +283,21 @@ local function spawnCloneForTarget(target)
         end
     end
 
-    local animate = newClone:FindFirstChild("Animate")
-    if animate then
-        local newAnim = animate:Clone()
-        animate:Destroy()
-        newAnim.Parent = newClone
-    end
-
+    setupAnimations(newClone)
     return newClone
 end
 
+--------------------------------------------------------------------------------
+-- CORE CONTROLLER ENGINE
+--------------------------------------------------------------------------------
 local function stopControlSession(destroyClone)
     controlling = false
     if renderConnection then renderConnection:Disconnect() renderConnection = nil end
 
-    if destroyClone and fakeChar then
-        fakeChar:Destroy()
-        fakeChar = nil
+    if destroyClone then
+        cleanPreviousTarget()
     end
 
-    -- Return camera to local player character
     if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
         localPlayer.Character.HumanoidRootPart.Anchored = false
         if originalCFrame then
@@ -294,7 +315,12 @@ end
 
 local function startControlSession()
     if not selectedPlr or not selectedPlr.Character then return end
-    targetPlayer = selectedPlr
+
+    -- Reset previous target if target has changed
+    if targetPlayer ~= selectedPlr then
+        cleanPreviousTarget()
+        targetPlayer = selectedPlr
+    end
 
     local myChar = localPlayer.Character
     local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -304,7 +330,7 @@ local function startControlSession()
     originalCFrame = myHrp.CFrame
     myHrp.Anchored = true
 
-    -- Keep original character invisible constantly
+    -- Constant visibility enforcement for chosen target
     if visConnection then visConnection:Disconnect() end
     visConnection = RunService.RenderStepped:Connect(function()
         if targetPlayer and targetPlayer.Character then
@@ -330,26 +356,26 @@ local function startControlSession()
             if not controlling or not fakeHumanoid or not fakeHrp then return end
 
             local camCFrame = camera.CFrame
-            local forward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
-            local right = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
+            local camLook = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
+            local camRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
 
-            local moveVector = Vector3.zero
+            local moveDirection = Vector3.zero
 
-            -- Keyboard inputs (Fixed camera relative directions)
-            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveVector = moveVector + forward end
-            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveVector = moveVector - forward end
-            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveVector = moveVector + right end
-            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveVector = moveVector - right end
+            -- Keyboard Controls
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDirection = moveDirection + camLook end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDirection = moveDirection - camLook end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDirection = moveDirection + camRight end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDirection = moveDirection - camRight end
 
-            -- Mobile Touch Joystick Support
+            -- Mobile Touch Controller
             local myHum = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
             if myHum and myHum.MoveDirection.Magnitude > 0 then
-                moveVector = myHum.MoveDirection
+                moveDirection = myHum.MoveDirection
             end
 
-            -- Apply Movement & Walking Sounds
-            if moveVector.Magnitude > 0 then
-                fakeHumanoid:Move(moveVector.Unit, true)
+            -- Apply Movement & Footstep Audio
+            if moveDirection.Magnitude > 0 then
+                fakeHumanoid:Move(moveDirection.Unit, false)
                 if tick() - lastFootstep > 0.35 and fakeHumanoid.FloorMaterial ~= Enum.Material.Air then
                     playLocalSound(SOUNDS.Footstep, 0.4, fakeHrp)
                     lastFootstep = tick()
@@ -377,12 +403,10 @@ end
 --------------------------------------------------------------------------------
 controlBtn.MouseButton1Click:Connect(startControlSession)
 
--- Stop Controlling: Camera goes back to user, but fake clone stays alive!
 stopBtn.MouseButton1Click:Connect(function()
     stopControlSession(false)
 end)
 
--- Reset Character: Breaks clone apart with Oof sound, then respawns clone & continues controlling
 resetBtn.MouseButton1Click:Connect(function()
     if fakeChar then
         local hum = fakeChar:FindFirstChildOfClass("Humanoid")
@@ -401,7 +425,6 @@ resetBtn.MouseButton1Click:Connect(function()
         task.wait(1.2)
         if fakeChar then fakeChar:Destroy() fakeChar = nil end
 
-        -- Respawn new clone at target's original spot and re-control
         if targetPlayer then
             fakeChar = spawnCloneForTarget(targetPlayer)
             startControlSession()
@@ -409,7 +432,6 @@ resetBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- Leave Game: Despawns clone, freezes camera for 3 seconds, then returns to user
 leaveBtn.MouseButton1Click:Connect(function()
     if fakeChar then
         fakeChar:Destroy()
@@ -419,20 +441,10 @@ leaveBtn.MouseButton1Click:Connect(function()
     camera.CameraType = Enum.CameraType.Scriptable
     task.wait(3)
 
-    if visConnection then visConnection:Disconnect() visConnection = nil end
-    if targetPlayer and targetPlayer.Character then
-        setCharacterVisibility(targetPlayer.Character, true)
-    end
-
     stopControlSession(true)
 end)
 
--- Close Button (X)
 closeBtn.MouseButton1Click:Connect(function()
-    if visConnection then visConnection:Disconnect() end
-    if targetPlayer and targetPlayer.Character then
-        setCharacterVisibility(targetPlayer.Character, true)
-    end
     stopControlSession(true)
     mainGui:Destroy()
     sessionGui:Destroy()
