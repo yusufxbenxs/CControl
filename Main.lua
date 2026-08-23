@@ -1,4 +1,3 @@
--- Safe Static UI Controller (No loadstring / No gethui / No Custom Environment)
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
@@ -6,29 +5,24 @@ local RunService = game:GetService("RunService")
 
 local localPlayer = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
-
--- Resolve GUI Parent strictly through PlayerGui to avoid CoreGui security limits
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 if playerGui:FindFirstChild("SimplePlayerControl") then
     playerGui.SimplePlayerControl:Destroy()
 end
 
--- 1. Create Base ScreenGui
 local sg = Instance.new("ScreenGui")
 sg.Name = "SimplePlayerControl"
 sg.ResetOnSpawn = false
-sg.DisplayOrder = 100
+sg.DisplayOrder = 999
 sg.Parent = playerGui
 
--- 2. Create Main Window
 local win = Instance.new("Frame")
 win.Name = "MainWindow"
 win.Size = UDim2.new(0, 200, 0, 140)
 win.Position = UDim2.new(0.05, 0, 0.3, 0)
 win.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
 win.BorderSizePixel = 1
-win.BorderColor3 = Color3.fromRGB(80, 80, 80)
 win.Active = true
 win.Draggable = true
 win.Parent = sg
@@ -36,7 +30,6 @@ win.Parent = sg
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 25)
 title.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-title.BorderSizePixel = 0
 title.Text = "Player Control"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.SourceSansBold
@@ -47,7 +40,6 @@ local targetBtn = Instance.new("TextButton")
 targetBtn.Size = UDim2.new(0.9, 0, 0, 25)
 targetBtn.Position = UDim2.new(0.05, 0, 0.25, 0)
 targetBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-targetBtn.BorderSizePixel = 0
 targetBtn.Text = "Select Target"
 targetBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 targetBtn.Font = Enum.Font.SourceSans
@@ -58,7 +50,6 @@ local scrollFrame = Instance.new("ScrollingFrame")
 scrollFrame.Size = UDim2.new(0.9, 0, 0, 60)
 scrollFrame.Position = UDim2.new(0.05, 0, 0.48, 0)
 scrollFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-scrollFrame.BorderSizePixel = 0
 scrollFrame.Visible = false
 scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
 scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
@@ -72,16 +63,12 @@ local toggleBtn = Instance.new("TextButton")
 toggleBtn.Size = UDim2.new(0.9, 0, 0, 25)
 toggleBtn.Position = UDim2.new(0.05, 0, 0.75, 0)
 toggleBtn.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
-toggleBtn.BorderSizePixel = 0
 toggleBtn.Text = "Start Control"
 toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 toggleBtn.Font = Enum.Font.SourceSansBold
 toggleBtn.TextSize = 13
 toggleBtn.Parent = win
 
---------------------------------------------------------------------------------
--- Logic
---------------------------------------------------------------------------------
 local selectedPlr = nil
 local controlling = false
 local fakeChar = nil
@@ -90,17 +77,13 @@ local renderConn = nil
 
 local function updatePlayerList()
     for _, child in ipairs(scrollFrame:GetChildren()) do
-        if child:IsA("TextButton") then
-            child:Destroy()
-        end
+        if child:IsA("TextButton") then child:Destroy() end
     end
-
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= localPlayer then
             local b = Instance.new("TextButton")
             b.Size = UDim2.new(1, 0, 0, 20)
             b.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-            b.BorderSizePixel = 0
             b.Text = p.Name
             b.TextColor3 = Color3.fromRGB(255, 255, 255)
             b.Font = Enum.Font.SourceSans
@@ -124,7 +107,6 @@ end)
 
 toggleBtn.MouseButton1Click:Connect(function()
     if controlling then
-        -- Stop Controlling
         controlling = false
         if renderConn then renderConn:Disconnect() renderConn = nil end
         if fakeChar then fakeChar:Destroy() fakeChar = nil end
@@ -144,7 +126,6 @@ toggleBtn.MouseButton1Click:Connect(function()
         toggleBtn.Text = "Start Control"
         toggleBtn.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
     else
-        -- Start Controlling
         if not selectedPlr or not selectedPlr.Character then return end
         local myHrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
         if not myHrp then return end
