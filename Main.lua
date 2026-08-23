@@ -1,4 +1,4 @@
--- Minimalist, Fail-Proof UI Test & Control Engine
+-- Safe Static UI Controller (No loadstring / No gethui / No Custom Environment)
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
@@ -7,89 +7,80 @@ local RunService = game:GetService("RunService")
 local localPlayer = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 
-print("[ExecTest] Starting Script...")
+-- Resolve GUI Parent strictly through PlayerGui to avoid CoreGui security limits
+local playerGui = localPlayer:WaitForChild("PlayerGui")
 
--- Direct GUI Parent Assignment with Fallback
-local guiParent
-local success, _ = pcall(function()
-    guiParent = game:GetService("CoreGui")
-end)
-
-if not success or not guiParent then
-    guiParent = localPlayer:WaitForChild("PlayerGui")
+if playerGui:FindFirstChild("SimplePlayerControl") then
+    playerGui.SimplePlayerControl:Destroy()
 end
 
-print("[ExecTest] Mounting UI to: " .. guiParent.Name)
+-- 1. Create Base ScreenGui
+local sg = Instance.new("ScreenGui")
+sg.Name = "SimplePlayerControl"
+sg.ResetOnSpawn = false
+sg.DisplayOrder = 100
+sg.Parent = playerGui
 
--- Destroy Old GUI
-if guiParent:FindFirstChild("DirectControlGUI") then
-    guiParent.DirectControlGUI:Destroy()
-end
-
--- Create ScreenGui
-local mainGui = Instance.new("ScreenGui")
-mainGui.Name = "DirectControlGUI"
-mainGui.ResetOnSpawn = false
-mainGui.DisplayOrder = 999999
-mainGui.Parent = guiParent
-
--- Control Window Frame
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 220, 0, 150)
-frame.Position = UDim2.new(0.05, 0, 0.2, 0)
-frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-frame.BorderSizePixel = 2
-frame.BorderColor3 = Color3.fromRGB(0, 255, 100)
-frame.Active = true
-frame.Draggable = true
-frame.Parent = mainGui
+-- 2. Create Main Window
+local win = Instance.new("Frame")
+win.Name = "MainWindow"
+win.Size = UDim2.new(0, 200, 0, 140)
+win.Position = UDim2.new(0.05, 0, 0.3, 0)
+win.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+win.BorderSizePixel = 1
+win.BorderColor3 = Color3.fromRGB(80, 80, 80)
+win.Active = true
+win.Draggable = true
+win.Parent = sg
 
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 25)
 title.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-title.Text = "Exec Control (Active)"
-title.TextColor3 = Color3.fromRGB(0, 255, 100)
+title.BorderSizePixel = 0
+title.Text = "Player Control"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.SourceSansBold
 title.TextSize = 14
-title.Parent = frame
+title.Parent = win
 
-local dropBtn = Instance.new("TextButton")
-dropBtn.Size = UDim2.new(0.9, 0, 0, 25)
-dropBtn.Position = UDim2.new(0.05, 0, 0.25, 0)
-dropBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-dropBtn.Text = "Select Target"
-dropBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-dropBtn.Font = Enum.Font.SourceSans
-dropBtn.TextSize = 13
-dropBtn.Parent = frame
+local targetBtn = Instance.new("TextButton")
+targetBtn.Size = UDim2.new(0.9, 0, 0, 25)
+targetBtn.Position = UDim2.new(0.05, 0, 0.25, 0)
+targetBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+targetBtn.BorderSizePixel = 0
+targetBtn.Text = "Select Target"
+targetBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+targetBtn.Font = Enum.Font.SourceSans
+targetBtn.TextSize = 13
+targetBtn.Parent = win
 
-local dropFrame = Instance.new("ScrollingFrame")
-dropFrame.Size = UDim2.new(0.9, 0, 0, 70)
-dropFrame.Position = UDim2.new(0.05, 0, 0.45, 0)
-dropFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-dropFrame.Visible = false
-dropFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-dropFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
-dropFrame.ZIndex = 5
-dropFrame.Parent = frame
+local scrollFrame = Instance.new("ScrollingFrame")
+scrollFrame.Size = UDim2.new(0.9, 0, 0, 60)
+scrollFrame.Position = UDim2.new(0.05, 0, 0.48, 0)
+scrollFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+scrollFrame.BorderSizePixel = 0
+scrollFrame.Visible = false
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scrollFrame.ZIndex = 10
+scrollFrame.Parent = win
 
-local layout = Instance.new("UIListLayout")
-layout.Parent = dropFrame
+local listLayout = Instance.new("UIListLayout")
+listLayout.Parent = scrollFrame
 
-local actionBtn = Instance.new("TextButton")
-actionBtn.Size = UDim2.new(0.9, 0, 0, 25)
-actionBtn.Position = UDim2.new(0.05, 0, 0.75, 0)
-actionBtn.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
-actionBtn.Text = "Start Control"
-actionBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-actionBtn.Font = Enum.Font.SourceSansBold
-actionBtn.TextSize = 13
-actionBtn.Parent = frame
-
-print("[ExecTest] UI Elements Loaded Successfully!")
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size = UDim2.new(0.9, 0, 0, 25)
+toggleBtn.Position = UDim2.new(0.05, 0, 0.75, 0)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+toggleBtn.BorderSizePixel = 0
+toggleBtn.Text = "Start Control"
+toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleBtn.Font = Enum.Font.SourceSansBold
+toggleBtn.TextSize = 13
+toggleBtn.Parent = win
 
 --------------------------------------------------------------------------------
--- SCRIPT LOGIC
+-- Logic
 --------------------------------------------------------------------------------
 local selectedPlr = nil
 local controlling = false
@@ -97,56 +88,64 @@ local fakeChar = nil
 local origCFrame = nil
 local renderConn = nil
 
-local function populateList()
-    for _, child in ipairs(dropFrame:GetChildren()) do
-        if child:IsA("TextButton") then child:Destroy() end
+local function updatePlayerList()
+    for _, child in ipairs(scrollFrame:GetChildren()) do
+        if child:IsA("TextButton") then
+            child:Destroy()
+        end
     end
+
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= localPlayer then
             local b = Instance.new("TextButton")
             b.Size = UDim2.new(1, 0, 0, 20)
-            b.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+            b.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+            b.BorderSizePixel = 0
             b.Text = p.Name
             b.TextColor3 = Color3.fromRGB(255, 255, 255)
             b.Font = Enum.Font.SourceSans
             b.TextSize = 12
-            b.ZIndex = 6
-            b.Parent = dropFrame
+            b.ZIndex = 11
+            b.Parent = scrollFrame
 
             b.MouseButton1Click:Connect(function()
                 selectedPlr = p
-                dropBtn.Text = "Target: " .. p.Name
-                dropFrame.Visible = false
+                targetBtn.Text = p.Name
+                scrollFrame.Visible = false
             end)
         end
     end
 end
 
-dropBtn.MouseButton1Click:Connect(function()
-    populateList()
-    dropFrame.Visible = not dropFrame.Visible
+targetBtn.MouseButton1Click:Connect(function()
+    updatePlayerList()
+    scrollFrame.Visible = not scrollFrame.Visible
 end)
 
-actionBtn.MouseButton1Click:Connect(function()
+toggleBtn.MouseButton1Click:Connect(function()
     if controlling then
-        -- STOP CONTROL
+        -- Stop Controlling
         controlling = false
-        if renderConn then renderConn:Disconnect() end
+        if renderConn then renderConn:Disconnect() renderConn = nil end
         if fakeChar then fakeChar:Destroy() fakeChar = nil end
 
-        if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
-            localPlayer.Character.HumanoidRootPart.Anchored = false
-            if origCFrame then localPlayer.Character.HumanoidRootPart.CFrame = origCFrame end
+        local myHrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+        local myHum = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+        
+        if myHrp then
+            myHrp.Anchored = false
+            if origCFrame then myHrp.CFrame = origCFrame end
+        end
+        if myHum then
             camera.CameraType = Enum.CameraType.Custom
-            camera.CameraSubject = localPlayer.Character:FindFirstChildOfClass("Humanoid")
+            camera.CameraSubject = myHum
         end
 
-        actionBtn.Text = "Start Control"
-        actionBtn.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+        toggleBtn.Text = "Start Control"
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
     else
-        -- START CONTROL
+        -- Start Controlling
         if not selectedPlr or not selectedPlr.Character then return end
-
         local myHrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
         if not myHrp then return end
 
@@ -159,10 +158,10 @@ actionBtn.MouseButton1Click:Connect(function()
         selectedPlr.Character.Archivable = false
         fakeChar.Parent = Workspace
 
-        for _, v in ipairs(fakeChar:GetDescendants()) do
-            if v:IsA("BasePart") then
-                v.Anchored = false
-                v.CanCollide = true
+        for _, part in ipairs(fakeChar:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.Anchored = false
+                part.CanCollide = true
             end
         end
 
@@ -190,7 +189,7 @@ actionBtn.MouseButton1Click:Connect(function()
             end)
         end
 
-        actionBtn.Text = "Stop Control"
-        actionBtn.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
+        toggleBtn.Text = "Stop Control"
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
     end
 end)
